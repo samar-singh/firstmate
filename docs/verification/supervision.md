@@ -273,3 +273,67 @@ Observed output:
 ```
 
 The safe command-channel contract is covered without a notification by `tests/fm-daemon.test.sh`: the summary reaches both `$1` and stdin, every channel is process-group bounded, and a failed channel falls through.
+
+## Claude Remote Control on the crewmate launch
+
+Measured on 2026-08-03 with Claude Code 2.1.220 on macOS (Darwin 25.5.0), covering the `config/claude-remote-control` opt-in added to `bin/fm-spawn.sh`.
+The whole point of the record is that enabling Remote Control must not change how firstmate notices a worker finishing.
+
+The installed CLI advertises the flag as an OPTIONAL value, which is the hazard the launch shape is built around.
+
+```sh
+$ claude --version
+2.1.220 (Claude Code)
+$ claude --help | sed -n '159,162p'
+  --remote-control [name]               Start an interactive session with Remote
+                                        Control enabled (optionally named)
+  --remote-control-session-name-prefix <prefix>
+      Prefix for auto-generated Remote Control session names (default: hostname)
+```
+
+A real ship crewmate was spawned into an isolated scratch home and scratch project on the tmux backend, with the opt-in file present.
+The typed launch bound the session name and left the encoded brief as a separate positional argument.
+
+```
+CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --remote-control 'rc-live-probe' "$('.../bin/fm-operational-input.sh' encode launch-brief < '.../data/rc-live-probe/brief.md')"
+```
+
+The pane confirmed the feature was live and the brief was still delivered in full, and the worker executed it.
+
+```
+/remote-control is active · Continue here, on your phone, or at
+https://claude.ai/code/session_01BzfjV1jVbpJiA2JukWdkSK
+```
+
+Every supervision surface behaved exactly as it does without the flag.
+
+| Surface | Command | Observed result |
+| --- | --- | --- |
+| Turn-end marker | `ls state/rc-live-probe.turn-ended` | Appeared within about 10s of the turn ending. |
+| Status append | `cat state/rc-live-probe.status` | `done: probe file written` |
+| Work actually done | `cat <worktree>/rc-probe.txt` | `REMOTE_CONTROL_PROBE_OK` |
+| Current-state read | `bin/fm-crew-state.sh rc-live-probe` | `state: done · source: status-log · probe file written` |
+| Steer delivery | `bin/fm-send.sh <window> --key Enter` | Exit 0; the trust dialog was accepted and the brief started processing. |
+| Pane capture | `bin/fm-peek.sh rc-live-probe` | Rendered normally, composer readable. |
+| Teardown refusal | `bin/fm-teardown.sh rc-live-probe` | `REFUSED: worktree ... has uncommitted changes.` while the probe's own untracked file was present. |
+| Teardown success | `bin/fm-teardown.sh rc-live-probe` | On a clean tree, closed the window and removed the task's state files, with no `--force`. |
+
+The logged-out failure mode was measured differentially, because a convenience feature must never cost a worker.
+An isolated `CLAUDE_CONFIG_DIR` with onboarding pre-seeded and no credentials was launched twice, identically except for the flag.
+Interactively both reached the same trust and bypass-permissions dialogs and exited with the same status; in print mode both printed `Not logged in · Please run /login` and exited 1.
+Remote Control therefore adds no new startup dependency, which is what makes emitting the flag safe rather than merely convenient.
+
+`#{pane_current_command}` reports `2.1.220` for a claude pane launched the way `bin/fm-spawn.sh` launches one, **both with and without** the flag, so this change does not affect tmux liveness classification.
+That version-named executable is the same pre-existing native-installer behavior already recorded above for session-lock ancestry, and it classifies as `ambiguous` rather than `alive` in `bin/backends/tmux.sh`.
+It is unchanged by this work and is not addressed here.
+
+### Compatibility axes reviewed
+
+Primary harnesses: only `claude` is affected, and the gate keys on the exact harness name, so `codex`, `opencode`, `pi`, `pi-signed`, `grok`, and `kimi` are not applicable after inspection.
+Each has its own launch template in `bin/fm-spawn.sh`, none of which carries the placeholder, and `tests/fm-spawn-dispatch-profile.test.sh` pins that a non-claude launch never receives the flag.
+
+Runtime backends (tmux, herdr, zellij, orca, cmux): not applicable after inspection.
+The flag is substituted into the launch string before any backend command runs, and every backend receives that string through the same `spawn_send_literal` path without parsing it.
+The live run above used tmux; nothing in the change reads a backend field of `state/<id>.meta`.
+
+Task kinds: ship, scout, and secondmate all launch from the single claude template, so all three receive the flag when the home opts in.
