@@ -42,6 +42,29 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # fm-spawn probes `claude --help` to decide whether the installed claude
+  # advertises --remote-control. Stub it so the assertion depends on the stub's
+  # declared capability instead of whatever claude the developer or CI runner
+  # happens to have on PATH (CI runners have none). The stub always advertises
+  # --remote-control-session-name-prefix and advertises the bare
+  # --remote-control only under FM_FAKE_CLAUDE_REMOTE_CONTROL=1, so a probe that
+  # matched the longer flag as a substring would wrongly report support.
+  cat > "$fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  --help)
+    printf '%s\n' 'Usage: claude [options] [command] [prompt]'
+    if [ "${FM_FAKE_CLAUDE_REMOTE_CONTROL:-0}" = 1 ]; then
+      printf '%s\n' '  --remote-control [name]  Start an interactive session with Remote Control enabled'
+    fi
+    printf '%s\n' '  --remote-control-session-name-prefix <prefix>  Prefix for auto-generated names'
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/claude"
   fm_fake_exit0 "$fakebin" treehouse pi-signed
   printf '%s\n' "$fakebin"
 }
@@ -93,6 +116,7 @@ run_spawn() {
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR="${FM_TEST_CLAUDE_CONFIG_DIR:-}" \
+    FM_FAKE_CLAUDE_REMOTE_CONTROL="${FM_FAKE_CLAUDE_REMOTE_CONTROL:-0}" \
     FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -673,6 +697,123 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
   pass "active crew-dispatch profile does not block secondmate launches"
 }
 
+enable_remote_control() {
+  printf '%s\n' 'on' > "$1/config/claude-remote-control"
+}
+
+test_claude_remote_control_names_the_session_after_the_task_id() {
+  local rec id out status expected launch
+  id=profile-claude-rc-z19
+  rec=$(make_spawn_case profile-claude-rc claude "$id")
+  read_case_record "$rec"
+  enable_remote_control "$HOME_DIR"
+
+  out=$(FM_FAKE_CLAUDE_REMOTE_CONTROL=1 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn with remote control enabled should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --remote-control '$id' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
+  [ "$launch" = "$expected" ] || fail "remote-control launch is not byte-exact"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  pass "opted-in claude launch names the Remote Control session after the task id"
+}
+
+test_claude_remote_control_composes_after_model_and_effort() {
+  local rec id out status launch
+  id=profile-claude-rc-flags-z20
+  rec=$(make_spawn_case profile-claude-rc-flags claude "$id")
+  read_case_record "$rec"
+  enable_remote_control "$HOME_DIR"
+
+  out=$(FM_FAKE_CLAUDE_REMOTE_CONTROL=1 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model sonnet --effort high)
+  status=$?
+  expect_code 0 "$status" "claude spawn with profile flags and remote control should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  # Single spaces between all three flags, and the session name still separated
+  # from the positional brief: this is what a lost trailing space would break.
+  assert_contains "$launch" "--model 'sonnet' --effort 'high' --remote-control '$id' \"\$(" \
+    "remote-control flag did not compose cleanly after --model and --effort"
+  pass "remote control composes after the model and effort flags without fusing arguments"
+}
+
+test_claude_remote_control_omitted_when_claude_does_not_advertise_it() {
+  local rec id out status launch
+  id=profile-claude-rc-unsupported-z21
+  rec=$(make_spawn_case profile-claude-rc-unsupported claude "$id")
+  read_case_record "$rec"
+  enable_remote_control "$HOME_DIR"
+
+  # The stub still advertises --remote-control-session-name-prefix, so a probe
+  # matching on substring rather than word boundary would wrongly emit the flag.
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "opting in on a claude without the flag must still launch the crewmate"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "--remote-control" \
+    "remote-control flag was emitted to a claude that does not advertise it"
+  assert_contains "$launch" "claude --dangerously-skip-permissions \"\$(" \
+    "unsupported-flag fallback did not keep the canonical claude launch"
+  pass "a claude without the flag launches unchanged instead of failing the spawn"
+}
+
+test_claude_remote_control_omitted_when_claude_is_not_on_path() {
+  local rec id out status launch
+  id=profile-claude-rc-noclaude-z22
+  rec=$(make_spawn_case profile-claude-rc-noclaude claude "$id")
+  read_case_record "$rec"
+  enable_remote_control "$HOME_DIR"
+  # fm-spawn resolves the harness by name, not by probing a binary, so a home
+  # whose claude lives only in the crewmate pane's PATH still spawns.
+  rm -f "$FAKEBIN_DIR/claude"
+
+  out=$(FM_FAKE_CLAUDE_REMOTE_CONTROL=1 \
+    PATH="$FAKEBIN_DIR:/usr/bin:/bin" \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "an unprobeable claude must still launch the crewmate"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "--remote-control" \
+    "remote-control flag was emitted without a probeable claude"
+  pass "an unprobeable claude launches unchanged instead of failing the spawn"
+}
+
+test_non_claude_harness_ignores_remote_control() {
+  local rec id out status launch
+  id=profile-codex-rc-z23
+  rec=$(make_spawn_case profile-codex-rc codex "$id")
+  read_case_record "$rec"
+  enable_remote_control "$HOME_DIR"
+
+  out=$(FM_FAKE_CLAUDE_REMOTE_CONTROL=1 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn should be unaffected by the claude remote-control knob"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "--remote-control" \
+    "claude-only remote-control flag leaked into the codex launch"
+  pass "the remote-control knob stays claude-only and never reaches another adapter"
+}
+
+test_claude_remote_control_reaches_secondmate_launches() {
+  local rec id sm out status launch
+  id=profile-secondmate-rc-z24
+  rec=$(make_spawn_case profile-secondmate-rc claude "$id")
+  read_case_record "$rec"
+  enable_remote_control "$HOME_DIR"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(FM_FAKE_CLAUDE_REMOTE_CONTROL=1 \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate spawn with remote control enabled should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--remote-control '$id' \"\$(" \
+    "secondmate claude launch did not receive the remote-control session name"
+  pass "a persistent secondmate is reachable from the remote surface under its own id"
+}
+
 test_no_profile_keeps_claude_profile_defaults
 test_relative_home_overrides_launch_with_absolute_cross_process_paths
 test_home_defaults_preserve_absolute_or_resolve_relative_paths
@@ -699,5 +840,11 @@ test_claude_forwards_firstmate_config_dir_when_set
 test_claude_omits_config_dir_prefix_when_unset
 test_non_claude_harness_ignores_config_dir
 test_active_dispatch_profile_does_not_block_secondmate_launch
+test_claude_remote_control_names_the_session_after_the_task_id
+test_claude_remote_control_composes_after_model_and_effort
+test_claude_remote_control_omitted_when_claude_does_not_advertise_it
+test_claude_remote_control_omitted_when_claude_is_not_on_path
+test_non_claude_harness_ignores_remote_control
+test_claude_remote_control_reaches_secondmate_launches
 
 echo "# all fm-spawn-dispatch-profile tests passed"

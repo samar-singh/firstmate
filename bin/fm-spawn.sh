@@ -769,7 +769,11 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # __REMOTECTL__ sits last so it is adjacent to the positional brief: claude's
+    # optional-value --remote-control must always carry its session name, and
+    # every flag placeholder self-delimits with a trailing space, which is why
+    # the three placeholders abut with no separator between them.
+    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG____REMOTECTL__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -955,6 +959,40 @@ effort_flag_for_harness() {
     # kimi likewise has no reasoning-effort flag; the requested axis stays in
     # task metadata but never reaches the launch command.
   esac
+}
+
+# Claude Code's --remote-control starts the interactive session with Remote
+# Control enabled, so the captain can watch and steer that crewmate from the
+# Claude mobile or web app. Firstmate names the session after the task id, so a
+# remote session list reads as supervised work rather than anonymous sessions.
+#
+# Two gates, both required, both failing OPEN. The flag is emitted only when the
+# home opted in with config/claude-remote-control AND the claude firstmate can
+# see advertises the flag. Every other outcome - no opt-in, no claude on PATH,
+# an older claude without the flag - omits it and launches exactly as before.
+# Losing a crewmate to an unavailable convenience feature is far worse than
+# losing the convenience, so no path here may return non-zero: fm-spawn runs
+# under `set -e`, and a failing probe in an assignment would abort the spawn.
+#
+# The session name is ALWAYS supplied. claude spells this `--remote-control
+# [name]` with an OPTIONAL value, so a bare flag immediately before the
+# positional brief would bind the encoded brief as the session name and start
+# the crewmate with no instructions at all.
+claude_advertises_remote_control() {
+  command -v claude >/dev/null 2>&1 || return 1
+  # Word-boundary match: a plain substring test would also match the sibling
+  # --remote-control-session-name-prefix and report false support.
+  claude --help 2>/dev/null | grep -Eq '(^|[^[:alnum:]_-])--remote-control([^[:alnum:]_-]|$)'
+}
+
+remote_control_flag_for_harness() {
+  local harness=$1 id=$2 config_dir=$3
+  [ "$harness" = claude ] || return 0
+  [ -n "$id" ] || return 0
+  [ -f "$config_dir/claude-remote-control" ] || return 0
+  claude_advertises_remote_control || return 0
+  printf -- '--remote-control %s ' "$(shell_quote "$id")"
+  return 0
 }
 
 case "$LAUNCH" in
@@ -2033,8 +2071,10 @@ sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+REMOTECTL=$(remote_control_flag_for_harness "$HARNESS" "$ID" "$CONFIG") || REMOTECTL=
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
+LAUNCH=${LAUNCH//__REMOTECTL__/$REMOTECTL}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
