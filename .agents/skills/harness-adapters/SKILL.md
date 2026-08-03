@@ -192,6 +192,14 @@ Its broader dark-TRUECOLOR placeholder handling and dark-theme tradeoff are docu
 That styled capture is internal to the boolean detector only.
 `fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
 
+**Remote Control (verified 2026-08-03, Claude Code 2.1.220).**
+`--remote-control [name]` starts the interactive session with Remote Control enabled, so the captain can watch and steer that crewmate from the Claude app.
+Firstmate passes the task id as the name when the home opted in with `config/claude-remote-control`; this is a per-launch conditional constant like `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`, not a fourth dispatch-profile axis.
+The value is optional in claude's own spelling, so the name must ALWAYS be supplied: a bare flag immediately before the positional prompt binds the encoded brief as the session name and starts the crewmate with no instructions.
+Detect support with a word-boundary probe of `claude --help` rather than assuming a version, because the sibling `--remote-control-session-name-prefix` matches a naive substring test.
+Verified empirically that the flag does not change startup or exit behavior when the account is logged out: an interactive launch with and without it reached the same trust and bypass-permissions dialogs and exited with the same status, and in print mode both returned the same `Not logged in` failure and exit 1.
+That is why firstmate treats it as safe to add to the launch rather than as a spawn dependency; `docs/verification/supervision.md` holds the live supervision evidence.
+
 **Primary-session guard fact (verified 2026-07-04, Claude Code 2.1.201; preserved 2026-07-08, Claude Code 2.1.204; Stop-owned auto-arm revalidated 2026-07-24, Claude Code 2.1.219).**
 This is separate from the per-task crewmate turn-end hook above (that one just `touch`es a marker file in a task's own `.claude/settings.local.json`).
 The firstmate PRIMARY's own `.claude/settings.json` registers two Stop hooks: `bin/fm-turnend-guard.sh --claude` and the Stop-owned auto-arm `bin/fm-claude-stop-autoarm.sh` (`asyncRewake: true`, `timeout: 28800`), and exiting the guard with status 2 plus stderr reliably forces the model to continue.

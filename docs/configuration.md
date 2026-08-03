@@ -279,6 +279,48 @@ Malformed JSON, an empty or malformed rule/default array, an unverified harness,
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
+## Claude Remote Control (config/claude-remote-control)
+
+The optional local `config/claude-remote-control` presence flag starts every `claude` crewmate with Claude Code's Remote Control enabled, so the captain can watch and steer a running worker from the Claude mobile or web app.
+Firstmate names each session after the task id, so the app's session list reads as `fa6-prod-scheduler-oom` rather than an anonymous session.
+The flag is presence-only: an empty file enables it, and the contents are never parsed, so there is no invalid value to diagnose.
+Absent means off, which is the default.
+
+It applies to the `claude` adapter alone, because no other verified adapter has an equivalent flag.
+It covers ship, scout, and persistent secondmate launches, so a long-lived secondmate is reachable under its own id.
+The flag is inherited into secondmate homes under the primary-authoritative contract owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md), so one primary setting covers the whole fleet's claude crewmates rather than only the primary's own.
+
+Both gates fail open, and neither can cost the captain a worker.
+Firstmate emits the flag only when the flag file is present and the `claude` it can see advertises `--remote-control`; no opt-in, no `claude` on `PATH`, or an older `claude` all omit the flag and launch exactly as before.
+The one case this cannot cover is a crewmate pane whose `PATH` resolves a different, older `claude` than the one firstmate probed, because the pane's environment is not firstmate's; that pane's `claude` would reject the flag.
+Keeping the flag off by default and per-home is what bounds that risk.
+`bin/fm-spawn.sh`'s launch-template section owns the exact flag spelling and the reason the session name is always supplied.
+
+## Reaching a running worker
+
+There are two ways to watch or steer a worker that is already running, and they are independent.
+
+The Claude app path needs `config/claude-remote-control` above.
+Once a claude crewmate is launched with it, that session appears in the Claude mobile or web app under its task id, and the captain can read its transcript and send it instructions from there.
+Anything the captain sends this way reaches the worker directly, so firstmate learns about it only at its next supervision review.
+
+The terminal path needs no firstmate configuration and works for every adapter.
+`herdr --remote <ssh-target> --session default` attaches a remote terminal to the running session.
+It requires Remote Login enabled on the Mac (System Settings, General, Sharing, Remote Login), which is off by default; with it off nothing is listening on port 22 and the connection is refused rather than delayed.
+Prefer reaching the machine over a private network such as a tailnet instead of exposing port 22 to the public internet.
+
+## Showing the captain an artifact remotely
+
+`lavish-axi` serves its HTML artifacts from a local server bound to localhost, so a captain who is away from the machine cannot open that link as-is.
+There are two ways to close that gap, and they have materially different exposure.
+
+The private path keeps the artifact on the machine and reaches it over a private network: expose the local `lavish-axi` port to the captain's tailnet, then open the artifact from the captain's device on that same tailnet.
+Nothing leaves hardware the captain controls.
+
+`lavish-axi share` instead uploads the artifact to a **third-party host**, and the resulting link is **public unless `--password` is passed**.
+Firstmate artifacts routinely contain customer commercial data, so an unpassworded share is a data disclosure, not a convenience.
+Neither path is automated here on purpose: choosing between them is the captain's call, per artifact.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
@@ -315,7 +357,7 @@ When a running home advances and its loaded instruction surface (`AGENTS.md`, `b
 If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a registered secondmate is skipped or its relaunch fails; already-live and successfully relaunched secondmates are handled silently.
 For a mid-session inherited local-material edit where tracked-file sync is not needed, run `bin/fm-config-push.sh`.
-It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, `backend`, `herdr-presentation-spaces`, `startup-memory-budget`, `trace-context`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
+It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, `backend`, `herdr-presentation-spaces`, `startup-memory-budget`, `claude-remote-control`, `trace-context`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
 When an allowlisted config item changes for an already-running local home, it sends the literal-content reread pointer described in [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md); unchanged allowlisted config sends no pointer unless a previous delivery is pending.
 A changed remote home instead receives one durably recorded marked re-read instruction after the allowlisted bytes have transferred because primary-local generation paths are not meaningful on another host.
 The locked bootstrap inheritance pass uses the same placement-specific behavior; see `secondmate-provisioning` for the single contract owner.
