@@ -65,6 +65,15 @@ SH
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case " $* " in
+  # fm-pr-merge.sh reads back the message the merge would write, to refuse
+  # carrying a CI-skip marker onto the default branch. The reply shape is the
+  # real gh contract: subject line count, commits-seen flag, PR state, then the
+  # subject, the body, and any commit messages. This fixture is deliberately
+  # clean, so the merge-wrapper cases here exercise the untouched path.
+  *" graphql "*)
+    printf '1\n1\n%s\nfixture merge subject (#37)\n* fixture merge body\n' \
+      "${FM_TEST_GH_MERGE_STATE:-OPEN}"
+    ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
   *" state "*)
     [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
