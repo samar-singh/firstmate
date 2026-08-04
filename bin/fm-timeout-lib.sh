@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# fm-timeout-lib.sh - the ONE owner of firstmate's bounded external-command idiom.
+# fm-timeout-lib.sh - the shared owner of firstmate's bounded external-command
+# idiom; source it here rather than inlining a fourth copy of the chain below.
+#
+# Not yet the only copy: bin/fm-watch.sh deliberately keeps its own exec-based
+# variant (owned process group and signal forwarding, which this helper does not
+# do), while bin/fm-bearings-snapshot.sh and bin/fm-quota-axi-lib.sh still carry
+# unmigrated inline copies of exactly this chain.
 #
 # Any call into a tool firstmate does not control (a vendor CLI, a backend
 # binary, a capability probe) can block forever, and several of those calls sit
