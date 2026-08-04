@@ -143,6 +143,7 @@ family_for_basename() {
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
     fm-supervision-instructions.test.sh|fm-task-delivery.test.sh|\
+    fm-timeout-lib.test.sh|\
     fm-tmux-submit-busy.test.sh|fm-trace-context-lib.test.sh|\
     fm-transition-lib.test.sh|\
     fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
@@ -907,6 +908,14 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       ;;
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh)
+      printf '%s\n' snapshot-bearings
+      ;;
+    # A shared helper selects its own unit coverage AND every consumer's family:
+    # fm-spawn.sh's capability probe, fm-fleet-snapshot.sh's bounded reads, and
+    # fm-vendor-auth-probe.sh all depend on this bound and its 124 contract.
+    bin/fm-timeout-lib.sh)
+      printf '%s\n' pure-contract-unit
+      printf '%s\n' backend-dispatch
       printf '%s\n' snapshot-bearings
       ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)
