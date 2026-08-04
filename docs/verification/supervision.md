@@ -302,8 +302,10 @@ The pane confirmed the feature was live and the brief was still delivered in ful
 
 ```
 /remote-control is active · Continue here, on your phone, or at
-https://claude.ai/code/session_01BzfjV1jVbpJiA2JukWdkSK
+https://claude.ai/code/session_<id>
 ```
+
+The session id is redacted here on purpose: it identifies a real session in the operator's own Claude account and is not needed to reproduce the result.
 
 Every supervision surface behaved exactly as it does without the flag.
 
