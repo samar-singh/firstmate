@@ -292,6 +292,12 @@ The flag is inherited into secondmate homes under the primary-authoritative cont
 
 Both gates fail open, and neither can cost the captain a worker.
 Firstmate emits the flag only when the flag file is present and the `claude` it can see advertises `--remote-control`; no opt-in, no `claude` on `PATH`, or an older `claude` all omit the flag and launch exactly as before.
+The capability probe is also time-bounded, because a `claude` that blocks instead of answering would otherwise wedge the spawn while it holds that task's spawn lock; the bound defaults to 5 seconds and `FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT` overrides it.
+A probe that hits the bound is read as "no answer" and drops the flag, exactly like an older `claude`.
+
+A dropped flag is never silent for a home that opted in: the spawn prints one non-fatal `warning:` line naming which of the three reasons applied - no `claude` on firstmate's `PATH`, an installed `claude` that does not advertise the flag, or a probe that did not answer within the bound - so a session missing from the Claude app is diagnosable rather than mysterious.
+The launch itself is unchanged and the spawn still succeeds.
+A home that has not opted in emits nothing at all, which is the default.
 The one case this cannot cover is a crewmate pane whose `PATH` resolves a different, older `claude` than the one firstmate probed, because the pane's environment is not firstmate's; that pane's `claude` would reject the flag.
 Keeping the flag off by default and per-home is what bounds that risk.
 `bin/fm-spawn.sh`'s launch-template section owns the exact flag spelling and the reason the session name is always supplied.

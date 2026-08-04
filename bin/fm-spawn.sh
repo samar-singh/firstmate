@@ -209,6 +209,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -978,20 +980,67 @@ effort_flag_for_harness() {
 # [name]` with an OPTIONAL value, so a bare flag immediately before the
 # positional brief would bind the encoded brief as the session name and start
 # the crewmate with no instructions at all.
-claude_advertises_remote_control() {
-  command -v claude >/dev/null 2>&1 || return 1
+#
+# The probe is also BOUNDED. It runs inside a command substitution while this
+# task's spawn lock is held, so a claude that blocks rather than exits - an npm
+# shim doing a network check, a wrapper waiting on stdin, a slow network home -
+# would wedge the spawn indefinitely and hold the lock. A non-zero exit is not
+# the only way a probe fails to answer; hanging is. fm_run_timed
+# (bin/fm-timeout-lib.sh) bounds it on hosts with and without coreutils, stdin
+# is closed so no wrapper can wait on input, and a bound that elapses is treated
+# as "no answer", which omits the flag exactly like an older claude would.
+FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT=${FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT:-5}
+# A non-positive bound is not a bound: `timeout 0` and the fallback's `alarm 0`
+# both disable the deadline.
+case "$FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT" in
+  ''|*[!0-9]*|0*) FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT=5 ;;
+esac
+
+# Prints exactly one diagnosis token on stdout and always returns 0:
+#   supported | no-claude | unadvertised | probe-timeout
+# The caller distinguishes them so an opted-in captain is told which of the
+# three ways the flag was dropped actually happened.
+claude_remote_control_support() {
+  local help rc=0
+  command -v claude >/dev/null 2>&1 || { printf 'no-claude\n'; return 0; }
+  help=$(fm_run_timed "$FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT" \
+    claude --help 2>/dev/null </dev/null) || rc=$?
+  if [ "$rc" -eq 124 ]; then
+    printf 'probe-timeout\n'
+    return 0
+  fi
   # Word-boundary match: a plain substring test would also match the sibling
   # --remote-control-session-name-prefix and report false support.
-  claude --help 2>/dev/null | grep -Eq '(^|[^[:alnum:]_-])--remote-control([^[:alnum:]_-]|$)'
+  if printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--remote-control([^[:alnum:]_-]|$)'; then
+    printf 'supported\n'
+  else
+    printf 'unadvertised\n'
+  fi
+  return 0
 }
 
 remote_control_flag_for_harness() {
-  local harness=$1 id=$2 config_dir=$3
+  local harness=$1 id=$2 config_dir=$3 support
   [ "$harness" = claude ] || return 0
   [ -n "$id" ] || return 0
   [ -f "$config_dir/claude-remote-control" ] || return 0
-  claude_advertises_remote_control || return 0
-  printf -- '--remote-control %s ' "$(shell_quote "$id")"
+  support=$(claude_remote_control_support)
+  # A dropped flag is announced, never silent, but ONLY for a home that opted
+  # in: every check above returns before this point, so an opted-out spawn - the
+  # default and the common case - stays exactly as quiet as it was. The note
+  # goes to stderr because stdout here is the launch fragment itself.
+  case "$support" in
+    supported) printf -- '--remote-control %s ' "$(shell_quote "$id")" ;;
+    no-claude)
+      echo "warning: config/claude-remote-control is set but no claude is on firstmate's PATH to probe; launching $id without Remote Control" >&2
+      ;;
+    probe-timeout)
+      echo "warning: config/claude-remote-control is set but 'claude --help' did not answer within ${FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT}s; launching $id without Remote Control" >&2
+      ;;
+    *)
+      echo "warning: config/claude-remote-control is set but the installed claude does not advertise --remote-control; launching $id without Remote Control" >&2
+      ;;
+  esac
   return 0
 }
 

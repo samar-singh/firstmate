@@ -49,11 +49,17 @@ SH
   # --remote-control-session-name-prefix and advertises the bare
   # --remote-control only under FM_FAKE_CLAUDE_REMOTE_CONTROL=1, so a probe that
   # matched the longer flag as a substring would wrongly report support.
+  # FM_FAKE_CLAUDE_REMOTE_CONTROL=hang is the third mode: a claude whose --help
+  # blocks instead of answering, which is what the probe's time bound exists for.
   cat > "$fakebin/claude" <<'SH'
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
   --help)
+    if [ "${FM_FAKE_CLAUDE_REMOTE_CONTROL:-0}" = hang ]; then
+      sleep 30
+      exit 0
+    fi
     printf '%s\n' 'Usage: claude [options] [command] [prompt]'
     if [ "${FM_FAKE_CLAUDE_REMOTE_CONTROL:-0}" = 1 ]; then
       printf '%s\n' '  --remote-control [name]  Start an interactive session with Remote Control enabled'
@@ -117,6 +123,7 @@ run_spawn() {
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR="${FM_TEST_CLAUDE_CONFIG_DIR:-}" \
     FM_FAKE_CLAUDE_REMOTE_CONTROL="${FM_FAKE_CLAUDE_REMOTE_CONTROL:-0}" \
+    FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT="${FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT:-5}" \
     FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -754,7 +761,11 @@ test_claude_remote_control_omitted_when_claude_does_not_advertise_it() {
     "remote-control flag was emitted to a claude that does not advertise it"
   assert_contains "$launch" "claude --dangerously-skip-permissions \"\$(" \
     "unsupported-flag fallback did not keep the canonical claude launch"
-  pass "a claude without the flag launches unchanged instead of failing the spawn"
+  # The drop is announced, and it names this reason rather than a generic one:
+  # an opted-in captain must be able to tell an old claude from a missing one.
+  assert_contains "$out" "does not advertise --remote-control" \
+    "the dropped flag was not announced to an opted-in captain"
+  pass "a claude without the flag launches unchanged, and says why the flag was dropped"
 }
 
 test_claude_remote_control_omitted_when_claude_is_not_on_path() {
@@ -775,7 +786,59 @@ test_claude_remote_control_omitted_when_claude_is_not_on_path() {
   launch=$(cat "$LAUNCH_LOG")
   assert_not_contains "$launch" "--remote-control" \
     "remote-control flag was emitted without a probeable claude"
-  pass "an unprobeable claude launches unchanged instead of failing the spawn"
+  assert_contains "$out" "no claude is on firstmate's PATH" \
+    "the dropped flag did not name the missing-claude reason"
+  pass "an unprobeable claude launches unchanged and names that reason"
+}
+
+test_claude_remote_control_probe_cannot_hang_the_spawn() {
+  local rec id out status launch started elapsed
+  id=profile-claude-rc-hang-z25
+  rec=$(make_spawn_case profile-claude-rc-hang claude "$id")
+  read_case_record "$rec"
+  enable_remote_control "$HOME_DIR"
+
+  # The probe runs while this task's spawn lock is held, so a claude that blocks
+  # rather than answering must cost the bound and nothing more. The stub sleeps
+  # far past the bound in both directions: well over the 2s deadline so the
+  # bound is genuinely exercised, and well under the 20s assertion so a loaded
+  # machine cannot make this flaky.
+  started=$(date +%s)
+  out=$(FM_FAKE_CLAUDE_REMOTE_CONTROL=hang FM_SPAWN_REMOTE_CONTROL_PROBE_TIMEOUT=2 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  elapsed=$(( $(date +%s) - started ))
+  expect_code 0 "$status" "a hanging capability probe must still launch the crewmate"
+  [ "$elapsed" -lt 20 ] || fail "spawn took ${elapsed}s: the capability probe was not bounded"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "--remote-control" \
+    "remote-control flag was emitted from a probe that never answered"
+  assert_contains "$launch" "claude --dangerously-skip-permissions \"\$(" \
+    "hanging-probe fallback did not keep the canonical claude launch"
+  assert_contains "$out" "did not answer within 2s" \
+    "the timed-out probe did not name the timeout as the reason"
+  pass "a hanging claude --help costs the bound, not the crewmate"
+}
+
+test_remote_control_opt_out_spawns_silently() {
+  local rec id out status launch
+  id=profile-claude-rc-optout-z26
+  rec=$(make_spawn_case profile-claude-rc-optout claude "$id")
+  read_case_record "$rec"
+  # Deliberately no enable_remote_control: this is the default and by far the
+  # common case, and it must produce no remote-control output whatsoever.
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "a spawn without the remote-control knob should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "--remote-control" \
+    "remote-control flag was emitted without an opt-in"
+  assert_not_contains "$out" "claude-remote-control" \
+    "an opted-out spawn advertised the remote-control knob it was never asked about"
+  assert_not_contains "$out" "Remote Control" \
+    "an opted-out spawn emitted a remote-control advisory"
+  pass "a home that never opted in spawns exactly as quietly as before"
 }
 
 test_non_claude_harness_ignores_remote_control() {
@@ -844,6 +907,8 @@ test_claude_remote_control_names_the_session_after_the_task_id
 test_claude_remote_control_composes_after_model_and_effort
 test_claude_remote_control_omitted_when_claude_does_not_advertise_it
 test_claude_remote_control_omitted_when_claude_is_not_on_path
+test_claude_remote_control_probe_cannot_hang_the_spawn
+test_remote_control_opt_out_spawns_silently
 test_non_claude_harness_ignores_remote_control
 test_claude_remote_control_reaches_secondmate_launches
 
