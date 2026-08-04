@@ -754,9 +754,50 @@ test_two_token_method_flag_is_honoured() {
   set -e
 
   expect_code 1 "$rc" "two-token-method: --method rebase must be read as a rebase and refused"
-  assert_grep 'CI-skip marker' "$case_dir/stderr" \
-    "two-token-method: the refusal did not name the CI-skip marker"
+  # The unresolvable-method refusal also says "CI-skip marker", so assert the
+  # rebase-specific text: anything less passes when the form is never resolved.
+  assert_grep 'replays commit messages verbatim' "$case_dir/stderr" \
+    "two-token-method: --method rebase was not resolved as a rebase"
+  assert_grep 'merge with --squash' "$case_dir/stderr" \
+    "two-token-method: the rebase refusal did not name the remedy"
+
+  # And the same form on a clean message must still merge, byte-identically to
+  # the pre-change invocation.
+  case_dir=$(neutralize_case two-token-method-squash \
+    'feat(bin): route remote commands through a job worker (#1660)' \
+    '* feat(bin): route remote commands through a job worker')
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/1660 -- --method squash \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "two-token-method: --method squash on a clean message must merge"
+
+  grep -qxF 'pr merge 1660 --repo example/repo --method squash' "$case_dir/gh-axi.log" \
+    || fail "two-token-method: --method squash did not reach gh-axi unchanged"
+  assert_absent "$case_dir/subject.out" \
+    "two-token-method: a clean --method squash merge must not pass --subject"
+  assert_absent "$case_dir/body.out" \
+    "two-token-method: a clean --method squash merge must not pass --body"
   pass "fm-pr-merge reads the two-token --method form when choosing what to scan"
+}
+
+test_dangling_method_flag_refuses() {
+  local case_dir rc
+  # A trailing --method with no value names no method at all; defaulting it to
+  # a squash would scan a message the merge might never write.
+  case_dir=$(neutralize_case dangling-method 'feat: a thing [skip ci] (#74)' '* feat: a thing')
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/74 -- --method \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "dangling-method: a --method with no value must not default to a squash"
+  assert_grep 'merge method could not be determined' "$case_dir/stderr" \
+    "dangling-method: the refusal did not name the unresolvable merge method"
+  assert_no_grep 'pr merge' "$case_dir/gh-axi.log" \
+    "dangling-method: gh-axi was invoked without ever checking the merge message"
+  pass "fm-pr-merge refuses a --method flag with no value rather than assuming a squash"
 }
 
 test_unknown_merge_method_refuses() {
@@ -971,6 +1012,7 @@ test_mid_body_skip_checks_trailer_is_left_alone
 test_neutralization_is_reported
 test_merge_message_is_requested_for_the_selected_method
 test_two_token_method_flag_is_honoured
+test_dangling_method_flag_refuses
 test_unknown_merge_method_refuses
 test_garbled_merge_message_reply_refuses
 test_truncated_commit_list_refuses_for_rebase

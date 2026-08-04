@@ -92,10 +92,14 @@ effective_merge_method() {
       --squash|--method=squash) echo SQUASH ; return 0 ;;
       --merge|--method=merge) echo MERGE ; return 0 ;;
       --rebase|--method=rebase) echo REBASE ; return 0 ;;
-      --method|--method=*) return 1 ;;
+      --method) prev=$arg ; continue ;;
+      --method=*) return 1 ;;
     esac
     prev=$arg
   done
+  if [ "$prev" = --method ]; then
+    return 1
+  fi
   echo SQUASH
 }
 
