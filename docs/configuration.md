@@ -282,7 +282,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Claude Remote Control (config/claude-remote-control)
 
 The optional local `config/claude-remote-control` presence flag starts every `claude` crewmate with Claude Code's Remote Control enabled, so the captain can watch and steer a running worker from the Claude mobile or web app.
-Firstmate names each session after the task id, so the app's session list reads as `fa6-prod-scheduler-oom` rather than an anonymous session.
+Firstmate names each session after the task id, so the app's session list reads as `checkout-retry-timeout` rather than an anonymous session.
 The flag is presence-only: an empty file enables it, and the contents are never parsed, so there is no invalid value to diagnose.
 Absent means off, which is the default.
 
