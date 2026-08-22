@@ -279,10 +279,16 @@ SH
   fm_git_worktree "$proj" "$wt" "wt-$name"
   id="proofspawn-$name"
   mkdir -p "$home/data/$id"
+  # A brief scaffolded before this gate existed carries no proof section at all -
+  # bin/fm-brief.sh only began rendering one with the gate - so the grandfathered
+  # case must not be handed a section header it could never have had.
   {
-    printf 'You are a crewmate.\n\n# Proof of what shipped\n'
-    [ -z "$proof" ] || printf 'Proof contract: %s\n' "$proof"
-    [ -z "$declaration" ] || printf 'Proof declaration: %s\n' "$declaration"
+    printf 'You are a crewmate.\n\n'
+    if [ -n "$proof" ] || [ -n "$declaration" ]; then
+      printf '# Proof of what shipped\n'
+      [ -z "$proof" ] || printf 'Proof contract: %s\n' "$proof"
+      [ -z "$declaration" ] || printf 'Proof declaration: %s\n' "$declaration"
+    fi
     printf '\n# Definition of done\nDelivery contract: mode=no-mistakes\n'
   } > "$home/data/$id/brief.md"
   printf '%s\n' "$home|$proj|$wt|$fakebin|$id"

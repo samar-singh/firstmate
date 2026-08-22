@@ -39,6 +39,12 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
 MODE=
 YOLO=
 MODE_SET=0
@@ -75,7 +81,7 @@ for a in "$@"; do
   esac
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
-[ "${#POS[@]}" -ge 1 ] || { echo "usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>" >&2; exit 1; }
+[ "${#POS[@]}" -ge 1 ] || { echo "usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> (--proof <what would prove this> | --proof-none <why it is not demonstrable>)" >&2; exit 1; }
 [ "$MODE_SET" -eq 1 ] || {
   echo "error: promotion requires --mode <no-mistakes|direct-PR|local-only>; decide it now from the scout's findings and the project's registered posture in data/projects.md" >&2
   exit 1
@@ -168,7 +174,8 @@ if [ "$PROOF" = demonstrable ]; then
 else
   PROMOTE_PROOF_STEP="; this task is declared not demonstrable ($PROOF_DECLARATION), so produce no evidence bundle for it"
 fi
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done$PROMOTE_PROOF_STEP>'"
+PROMOTE_SHIP_INSTRUCTIONS="<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done$PROMOTE_PROOF_STEP>"
+echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID $(shell_quote "$PROMOTE_SHIP_INSTRUCTIONS")"
 
 promote_print_rechain_hint() {
   local consent_home=$1 work_home=$2 task_id=$3 id prefix

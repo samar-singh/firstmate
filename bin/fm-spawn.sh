@@ -1703,23 +1703,29 @@ fi
 SPAWN_PROOF=
 SPAWN_PROOF_DECLARATION=
 if [ "$KIND" = ship ] && [ "$RELAUNCH" -ne 1 ]; then
-  SPAWN_PROOF=$(sed -n 's/^Proof contract: \([A-Za-z-]*\)[[:space:]]*$/\1/p' "$BRIEF" | head -n 1)
-  SPAWN_PROOF_DECLARATION=$(sed -n 's/^Proof declaration: \(.*\)$/\1/p' "$BRIEF" | head -n 1)
-  case "$SPAWN_PROOF" in
-    '')
-      echo "warning: $BRIEF declares no proof contract (scaffolded before ship briefs declared one); nothing will be enforced about proof for $ID - re-scaffold with --proof or --proof-none if this task should carry one" >&2
-      ;;
-    demonstrable|none)
-      if [ -z "$SPAWN_PROOF_DECLARATION" ]; then
-        echo "error: $BRIEF says 'Proof contract: $SPAWN_PROOF' but carries no 'Proof declaration:' line; re-scaffold the brief with bin/fm-brief.sh so the declaration and the task record agree" >&2
+  SPAWN_PROOF_SECTION=$(sed -n '/^# Proof of what shipped$/,/^# /p' "$BRIEF")
+  if [ -z "$SPAWN_PROOF_SECTION" ]; then
+    echo "warning: $BRIEF declares no proof contract (scaffolded before ship briefs declared one); nothing will be enforced about proof for $ID - re-scaffold with --proof or --proof-none if this task should carry one" >&2
+  else
+    SPAWN_PROOF=$(printf '%s\n' "$SPAWN_PROOF_SECTION" | sed -n 's/^Proof contract: \([A-Za-z-]*\)[[:space:]]*$/\1/p' | head -n 1)
+    SPAWN_PROOF_DECLARATION=$(printf '%s\n' "$SPAWN_PROOF_SECTION" | sed -n 's/^Proof declaration: \(.*\)$/\1/p' | head -n 1)
+    case "$SPAWN_PROOF" in
+      '')
+        echo "error: $BRIEF carries a proof section but no readable 'Proof contract:' line; re-scaffold the brief with bin/fm-brief.sh so the declaration and the task record agree" >&2
         exit 1
-      fi
-      ;;
-    *)
-      echo "error: $BRIEF declares an unrecognized proof contract '$SPAWN_PROOF'; it must be demonstrable or none (bin/fm-proof.sh)" >&2
-      exit 1
-      ;;
-  esac
+        ;;
+      demonstrable|none)
+        if [ -z "$SPAWN_PROOF_DECLARATION" ]; then
+          echo "error: $BRIEF says 'Proof contract: $SPAWN_PROOF' but carries no 'Proof declaration:' line; re-scaffold the brief with bin/fm-brief.sh so the declaration and the task record agree" >&2
+          exit 1
+        fi
+        ;;
+      *)
+        echo "error: $BRIEF declares an unrecognized proof contract '$SPAWN_PROOF'; it must be demonstrable or none (bin/fm-proof.sh)" >&2
+        exit 1
+        ;;
+    esac
+  fi
 fi
 
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
