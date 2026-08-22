@@ -73,6 +73,12 @@ make_fake_root() {
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
   ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
+  # fm-proof.sh: teardown INVOKES it (not sources it) for the kind=ship proof
+  # gate, so it must exist in the fake bin/ or the gate call fails and teardown
+  # refuses before ever reaching the tasktmp cleanup this suite checks. This
+  # fixture's task carries no proof= declaration, so the gate reports it
+  # unenforced and returns cleanly - exactly the pre-gate task it represents.
+  ln -s "$ROOT/bin/fm-proof.sh" "$fake/bin/fm-proof.sh"
   # fm-public-followup-lib.sh (and the fm-x-lib.sh it sources): teardown sources
   # it for the relay-activation gate on the promised-public-reply check. Neither
   # does anything in this fixture, which has no .env, but both are real siblings
@@ -154,6 +160,12 @@ test_teardown_skips_gracefully_without_tasktmp() {
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
   ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
+  # fm-proof.sh: teardown INVOKES it (not sources it) for the kind=ship proof
+  # gate, so it must exist in the fake bin/ or the gate call fails and teardown
+  # refuses before ever reaching the tasktmp cleanup this suite checks. This
+  # fixture's task carries no proof= declaration, so the gate reports it
+  # unenforced and returns cleanly - exactly the pre-gate task it represents.
+  ln -s "$ROOT/bin/fm-proof.sh" "$fake/bin/fm-proof.sh"
   # fm-public-followup-lib.sh (and the fm-x-lib.sh it sources): teardown sources
   # it for the relay-activation gate on the promised-public-reply check. Neither
   # does anything in this fixture, which has no .env, but both are real siblings
