@@ -462,6 +462,7 @@ DOD=${DOD%$'\n'}
 # emits this evidence, so asking for a second verification pass here would both
 # duplicate that path and stack a gate around it.
 if [ "$PROOF" = none ]; then
+  RULE2='2. Stay inside this worktree; the only file you may write outside it is the status file below.'
   IFS= read -r -d '' PROOF_SECTION <<EOF || true
 # Proof of what shipped
 Proof contract: none
@@ -473,6 +474,7 @@ Manufactured screenshots for a refactor, a dependency bump, or a docs fix teach 
 If the work turns out to change something a person can actually see, say so in a status line instead of inventing artifacts.
 EOF
 else
+  RULE2='2. Stay inside this worktree; the only files you may write outside it are the status file below and the evidence bundle the Proof section requires.'
   IFS= read -r -d '' PROOF_SECTION <<EOF || true
 # Proof of what shipped
 Proof contract: demonstrable
@@ -507,7 +509,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+$RULE2
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`

@@ -721,7 +721,7 @@ test_ship_proof_gate_does_not_touch_scouts() {
   set -e
 
   assert_no_grep "fm-proof:" "$case_dir/stderr" "proof-scout: the ship proof gate spoke about a scout task"
-  [ "$rc" -eq 0 ] || assert_no_grep "declared what would prove it" "$case_dir/stderr" \
+  [ "$rc" -eq 0 ] || assert_no_grep "did not pass the ship proof gate" "$case_dir/stderr" \
     "proof-scout: a scout was refused by the ship proof gate"
   pass "the ship proof gate leaves scout teardown to its own report gate"
 }

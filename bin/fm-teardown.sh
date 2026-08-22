@@ -2343,7 +2343,7 @@ fi
 if [ "$KIND" = ship ] && [ "$FORCE" != "--force" ]; then
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       "$SCRIPT_DIR/fm-proof.sh" verify "$ID" >/dev/null; then
-    echo "REFUSED: ship task $ID declared what would prove it, and no such proof survives." >&2
+    echo "REFUSED: ship task $ID did not pass the ship proof gate; see the message above." >&2
     exit 1
   fi
 fi
