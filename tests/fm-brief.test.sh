@@ -202,7 +202,8 @@ test_ship_modes_generate_clean_briefs() {
   for id_mode in "brief-nomistakes-a1:no-mistakes" "brief-directpr-a2:direct-PR" "brief-localonly-a3:local-only"; do
     id=${id_mode%%:*}
     mode=${id_mode##*:}
-    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1; status=$?
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" \
+      --proof 'the list page shows the new column' >/dev/null 2>&1; status=$?
     expect_code 0 "$status" "fm-brief.sh $id --mode $mode should exit 0"
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "$id: brief was not scaffolded"
@@ -251,7 +252,7 @@ test_ship_mode_is_explicit_not_registry() {
   local home brief
   home="$TMP_ROOT/explicit-over-registry-home"
   write_registry "$home"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a5 direct-proj --mode no-mistakes >/dev/null 2>&1 \
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a5 direct-proj --mode no-mistakes --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1 \
     || fail "explicit no-mistakes brief on a direct-PR project should scaffold"
   brief="$home/data/brief-explicit-a5/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
@@ -260,14 +261,14 @@ test_ship_mode_is_explicit_not_registry() {
     "explicit no-mistakes brief did not render the pipeline definition of done"
 
   # An unregistered project is not a blocker either, because nothing is looked up.
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a6 never-registered --mode local-only >/dev/null 2>&1 \
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a6 never-registered --mode local-only --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1 \
     || fail "unregistered project should still scaffold from the explicit mode"
   grep -qx "Delivery contract: mode=local-only" "$home/data/brief-explicit-a6/brief.md" \
     || fail "unregistered project did not honour the explicit --mode"
   pass "fm-brief.sh: the explicit ship mode wins over the registered posture"
 }
 
-# yolo is firstmate's approval authority and never reaches the worker, and a scout
+# yolo is firstmate's merge authority and never reaches the worker, and a scout
 # or charter carries no delivery contract. Each must refuse rather than accept and
 # discard the flag, which would look recorded but change nothing.
 test_delivery_flags_are_refused_where_they_do_not_apply() {
@@ -295,14 +296,14 @@ test_faster_paths_use_configured_authority_without_stacked_review() {
   home="$TMP_ROOT/configured-authority-home"
   write_registry "$home"
   id="brief-direct-authority-a4"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_grep "The configured merge authority decides whether to merge the PR; firstmate relays the outcome." "$brief" \
     "direct-PR brief lost configured merge authority"
   assert_no_grep "The captain reviews and merges the PR" "$brief" \
     "direct-PR brief hard-coded captain-only authority"
   id="brief-local-authority-a4"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --mode local-only >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --mode local-only --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_grep "The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path." "$brief" \
     "local-only brief lost configured merge authority and guarded landing"
@@ -313,7 +314,7 @@ test_faster_paths_use_configured_authority_without_stacked_review() {
   assert_no_grep "make \`--intent\` preserve all relevant content from this brief" "$home/data/$id/brief.md" \
     "local-only brief must not include the no-mistakes --intent contract"
   id="brief-direct-intent-a4"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
   assert_no_grep "make \`--intent\` preserve all relevant content from this brief" "$home/data/$id/brief.md" \
     "direct-PR brief must not include the no-mistakes --intent contract"
   pass "fm-brief.sh: faster paths use configured authority without stacked review"
@@ -326,7 +327,7 @@ test_no_mistakes_dod_wording() {
   home="$TMP_ROOT/wording-home"
   mkdir -p "$home/data"
   id="brief-wording-b1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "brief was not scaffolded"
   assert_grep "no-mistakes itself provides for the mechanics" "$brief" \
@@ -359,7 +360,7 @@ test_ship_project_memory_wording() {
   home="$TMP_ROOT/project-memory-home"
   mkdir -p "$home/data"
   id="brief-memory-c1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "brief was not scaffolded"
   assert_grep "Record only project knowledge useful to almost every future session." "$brief" \
@@ -376,7 +377,7 @@ test_herdr_lab_contract_is_explicit_and_complete() {
   home="$TMP_ROOT/herdr-lab-home"
   mkdir -p "$home/data"
   id="brief-herdr-lab-d1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes --herdr-lab >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes --proof-none 'fixture: no user-visible surface' --herdr-lab >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "Herdr lab brief was not scaffolded"
   assert_grep "# Herdr isolation - HARD SAFETY CONTRACT" "$brief" \
@@ -428,7 +429,7 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout() {
     if [ "$kind" = scout ]; then
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
     else
-      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes >/dev/null 2>&1
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
     fi
     brief="$home/data/$id/brief.md"
     assert_grep "# Herdr lifecycle declaration - NOT ENABLED" "$brief" \
@@ -643,7 +644,7 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
     case "$kind" in
       ship)
         FM_HOME="$home" FM_CLASSIFY_PAUSED_VERB=awaiting \
-          "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes >/dev/null 2>&1
+          "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
         ;;
       scout)
         FM_HOME="$home" FM_CLASSIFY_PAUSED_VERB=awaiting \
@@ -663,8 +664,10 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
     # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
     assert_no_grep '`paused: {why}`' "$brief" \
       "$kind brief still instructs the default paused status"
-    assert_grep 'or a blocker clears' "$brief" \
+    assert_grep 'a blocker or wait clears' "$brief" \
       "$kind brief did not require durable resolution when a blocker clears"
+    assert_grep 'even when the answer is what started that work' "$brief" \
+      "$kind brief did not warn that an answer-started done/working never closes a decision"
   done
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
@@ -676,15 +679,15 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     "$ROOT/bin/fm-brief.sh" sample-investigation sample --scout >/dev/null 2>&1
   scout="$home/data/sample-investigation/brief.md"
-  assert_grep "$ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md" "$scout" \
-    "scout brief did not load the unresolved-decision policy before done"
+  assert_grep "$ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md" "$scout" \
+    "scout brief did not load the captain-call policy before done"
   assert_grep "pass its shared completion gate for the report and any visual review" "$scout" \
     "scout brief did not cross-reference visual-review completion"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SECONDMATE_CHARTER='sample reviews' \
     "$ROOT/bin/fm-brief.sh" sample-mate --secondmate --no-projects >/dev/null 2>&1
   charter="$home/data/sample-mate/brief.md"
-  assert_grep "load \`decision-hold-lifecycle\`" "$charter" \
-    "secondmate charter did not load the shared decision policy for detailed investigations"
+  assert_grep "load \`captain-hold-lifecycle\`" "$charter" \
+    "secondmate charter did not load the shared captain-call policy for detailed investigations"
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
@@ -697,6 +700,8 @@ test_scout_and_secondmate_scaffold() {
   assert_present "$brief" "scout brief was not scaffolded"
   assert_grep "SCOUT task" "$brief" "scout brief must declare itself a scout task"
   assert_grep "report.md" "$brief" "scout brief must point at the report deliverable"
+  assert_grep "you may host the Lavish review loop yourself" "$brief" \
+    "scout brief must mention the option to host a Lavish review loop"
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
     FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
@@ -708,11 +713,107 @@ test_scout_and_secondmate_scaffold() {
   pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
 }
 
+# The proof declaration is an INTAKE decision (bin/fm-proof.sh): the scaffold
+# refuses without it, so "what would prove this?" is answered while it is still
+# an acceptance criterion rather than a rationalization of whatever happened.
+test_ship_proof_declaration_is_required_and_exclusive() {
+  local home out status id=0
+  home="$TMP_ROOT/proof-required-home"
+  mkdir -p "$home/data"
+  while IFS='|' read -r label flags expect; do
+    [ -n "$label" ] || continue
+    id=$((id + 1))
+    # shellcheck disable=SC2086  # flags is an intentional word-split arg list
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "brief-proof-$id" some-proj --mode no-mistakes $flags 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "$label: expected a non-zero exit"
+    assert_contains "$out" "$expect" "$label: refusal did not explain the contract"
+    assert_absent "$home/data/brief-proof-$id/brief.md" "$label: refused scaffold still wrote a brief"
+  done <<'ROWS'
+no proof declaration at all||require --proof
+both legs at once|--proof visible --proof-none invisible|exactly one of --proof or --proof-none
+empty --proof value|--proof=|must not be empty
+empty --proof-none value|--proof-none=|must not be empty
+--proof with no value|--proof|requires a value
+ROWS
+  pass "fm-brief.sh: exactly one ship proof declaration is required, never inferred"
+}
+
+# A scout already leaves a surviving report and a charter ships nothing, so the
+# declaration must be refused there rather than silently ignored.
+test_proof_declaration_is_refused_where_it_does_not_apply() {
+  local home out status
+  home="$TMP_ROOT/proof-misuse-home"
+  mkdir -p "$home/data"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-proof-scout some-proj --scout --proof 'shows up' 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "scout scaffold accepted a proof declaration"
+  assert_contains "$out" "apply only to ship briefs" "scout proof refusal did not explain itself"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-proof-sm --secondmate --no-projects --proof-none 'n/a' 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "secondmate charter accepted a proof declaration"
+  assert_contains "$out" "apply only to ship briefs" "charter proof refusal did not explain itself"
+  pass "fm-brief.sh: proof declarations are refused on scout and secondmate scaffolds"
+}
+
+# The demonstrable leg must read as capture-and-durability. AGENTS.md section 7
+# gives the selected delivery path sole ownership of rigor, so a brief that told
+# the worker to verify again would stack a gate around no-mistakes.
+test_demonstrable_brief_asks_for_capture_not_more_verification() {
+  local home brief
+  home="$TMP_ROOT/proof-demo-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-proof-demo some-proj --mode no-mistakes \
+    --proof 'the subject search returns hangtag rows against the live corpus' >/dev/null 2>&1 \
+    || fail "demonstrable ship scaffold exited non-zero"
+  brief="$home/data/brief-proof-demo/brief.md"
+  grep -qx "Proof contract: demonstrable" "$brief" \
+    || fail "demonstrable brief did not record its machine-readable proof contract line"
+  grep -qx "Proof declaration: the subject search returns hangtag rows against the live corpus" "$brief" \
+    || fail "demonstrable brief did not carry the declaration verbatim"
+  assert_grep "$home/data/brief-proof-demo/proof/" "$brief" \
+    "demonstrable brief did not name the durable evidence bundle path"
+  assert_grep "capture and durability, NOT an extra verification pass" "$brief" \
+    "demonstrable brief reads as a second verification pass rather than capture"
+  assert_grep "never manufacture an artifact" "$brief" \
+    "demonstrable brief does not warn against manufactured evidence"
+  # shellcheck disable=SC2016 # Literal brief prose; the backticks are Markdown.
+  assert_grep 'Before the FINAL `done:` line' "$brief" \
+    "demonstrable brief did not anchor capture to the final done gate"
+  pass "fm-brief.sh: demonstrable ship briefs ask for capture, not further verification"
+}
+
+# The escape hatch has to be a first-class path. A non-demonstrable brief must
+# not carry a proof requirement at all, or every reader learns to skim evidence.
+test_non_demonstrable_brief_carries_no_capture_requirement() {
+  local home brief
+  home="$TMP_ROOT/proof-none-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-proof-none some-proj --mode direct-PR \
+    --proof-none 'internal lint configuration with no user-visible surface' >/dev/null 2>&1 \
+    || fail "non-demonstrable ship scaffold exited non-zero"
+  brief="$home/data/brief-proof-none/brief.md"
+  grep -qx "Proof contract: none" "$brief" \
+    || fail "non-demonstrable brief did not record its machine-readable proof contract line"
+  grep -qx "Proof declaration: internal lint configuration with no user-visible surface" "$brief" \
+    || fail "non-demonstrable brief did not carry the attestation verbatim"
+  assert_no_grep "Before the FINAL" "$brief" \
+    "non-demonstrable brief still demands a capture step"
+  assert_grep "Produce no evidence bundle" "$brief" \
+    "non-demonstrable brief does not tell the worker to skip the bundle"
+  pass "fm-brief.sh: non-demonstrable ship briefs demand no artifacts"
+}
+
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
+test_ship_proof_declaration_is_required_and_exclusive
+test_proof_declaration_is_refused_where_it_does_not_apply
+test_demonstrable_brief_asks_for_capture_not_more_verification
+test_non_demonstrable_brief_carries_no_capture_requirement
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review

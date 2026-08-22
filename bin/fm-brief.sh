@@ -6,7 +6,8 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only>
+#          (--proof <what would prove this> | --proof-none <why it is not demonstrable>) [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
@@ -36,6 +37,13 @@
 #                the configured merge authority approves, firstmate merges to local main
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
+# Ship briefs also REQUIRE the proof declaration - exactly one of --proof or
+# --proof-none - and refuse to scaffold without it, because "what would prove
+# this?" is an acceptance criterion at intake and a rationalization afterwards.
+# The generated brief carries a fixed machine-readable "Proof contract:
+# <demonstrable|none>" line, and bin/fm-proof.sh's header owns the whole contract:
+# where the declaration is recorded, where the evidence bundle lives, and how ship
+# teardown gates on it. --proof-none is a complete answer, not a bypass.
 # The generated ship brief records the chosen mode as a fixed machine-readable
 # "Delivery contract: mode=<mode>" line. bin/fm-spawn.sh reads that line and refuses
 # to launch a ship task whose explicit --mode disagrees, so an adjusted brief and the
@@ -43,7 +51,7 @@
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # --mode is refused on scout and secondmate scaffolds: a scout's deliverable is a
 # report rather than a merge, and a charter is not a delivery contract.
-# There is no --yolo flag here. The worker never owns approval decisions, so yolo is
+# There is no --yolo flag here. The worker never owns merge decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
@@ -106,6 +114,10 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
+PROOF=
+PROOF_DECLARATION=
+PROOF_SET=0
+PROOF_FLAGS=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -115,6 +127,8 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      proof) PROOF=demonstrable; PROOF_DECLARATION=$a; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+      proof-none) PROOF=none; PROOF_DECLARATION=$a; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -127,10 +141,14 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
-    # yolo never reaches the worker: it is firstmate's approval authority, not a
+    --proof) want_value=proof ;;
+    --proof=*) PROOF=demonstrable; PROOF_DECLARATION=${a#--proof=}; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+    --proof-none) want_value=proof-none ;;
+    --proof-none=*) PROOF=none; PROOF_DECLARATION=${a#--proof-none=}; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+    # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
-    --yolo|--yolo=*) echo "error: --yolo is not a brief input; pass it to bin/fm-spawn.sh, which records the task's approval posture" >&2; exit 1 ;;
+    --yolo|--yolo=*) echo "error: --yolo is not a brief input; pass it to bin/fm-spawn.sh, which records the task's merge posture" >&2; exit 1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -152,6 +170,30 @@ if [ "$KIND" = ship ]; then
   esac
 elif [ "$MODE_SET" -eq 1 ]; then
   echo "error: --mode applies only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
+  exit 1
+fi
+
+# The ship proof declaration, decided at intake for the reason bin/fm-proof.sh's
+# header states: asked at the end, "what would prove this?" only rationalizes
+# whatever happened. Asked here it is an acceptance criterion. Either leg is a
+# complete answer, and --proof-none is a first-class attestation rather than a
+# bypass - forcing artifacts onto a refactor, a dependency bump, or a docs fix
+# trains every reader to skim the evidence.
+if [ "$KIND" = ship ]; then
+  [ "$PROOF_SET" -eq 1 ] || {
+    echo "error: ship briefs require --proof <what would prove this task> or --proof-none <why it is not demonstrable>; decide it now, not after the work (bin/fm-proof.sh)" >&2
+    exit 1
+  }
+  [ "$PROOF_FLAGS" -eq 1 ] || {
+    echo "error: pass exactly one of --proof or --proof-none; a task is either demonstrable or it is not" >&2
+    exit 1
+  }
+  [ -n "$PROOF_DECLARATION" ] || { echo "error: the proof declaration must not be empty" >&2; exit 1; }
+  case "$PROOF_DECLARATION" in
+    *$'\n'*|*$'\r'*) echo "error: the proof declaration must be one line" >&2; exit 1 ;;
+  esac
+elif [ "$PROOF_SET" -eq 1 ]; then
+  echo "error: --proof and --proof-none apply only to ship briefs; a scout's report is already its surviving artifact and a secondmate charter ships nothing" >&2
   exit 1
 fi
 ID=${POS[0]}
@@ -229,7 +271,7 @@ Marked requests also carry a privacy-safe \`corr=<id>\` token after the marker; 
 Optional helper: \`bin/fm-secondmate-report.sh\` can append a correlated status line for you, but a plain \`echo\` that includes the same \`corr=<id>\` is equally valid - do not depend on the helper being present.
 For a terse result, a status line is the whole answer.
 For a detailed answer (an investigation, a plan, an audit), write it to a doc under your home's \`data/\` and append a status line that points to that doc - the scout-report pattern - so the main firstmate is woken and can read it.
-Before treating an investigation or visual review as complete, load \`decision-hold-lifecycle\` from this home's \`.agents/skills/\` and pass its shared completion gate.
+Before treating an investigation or visual review as complete, load \`captain-hold-lifecycle\` from this home's \`.agents/skills/\` and pass its shared completion gate.
 A message with NO marker is the captain typing directly into your pane: treat it as authoritative captain intervention and stay conversational exactly as you would for any captain message; do not force it onto the status path.
 
 # Escalation to main firstmate
@@ -245,7 +287,8 @@ Never append \`working:\` merely to acknowledge receipt or announce that a marke
 When a routed-work phase has a supervisor-actionable material change worth reporting under the rule above, give that reported phase a stable key.
 If its first reportable event is \`working [key=<work-slug>]: {material phase}\`, use the same key on its later \`$PAUSED_VERB\`, \`done\`, \`failed\`, \`needs-decision\`, or \`blocked\` event so the earlier working phase is superseded.
 When a keyed phase ends without another reportable state, append \`resolved [key=<work-slug>]: {why it is no longer active}\`.
-When a decision you escalated is answered or a blocker clears and your domain resumes, append \`resolved: {how it was decided or unblocked}\` (keyed with \`[key=<slug>]\` if you opened it with one) so it is durably closed instead of resurfacing behind later unrelated events.
+\`resolved\` separately closes an escalated decision or blocker, and only a \`resolved\` line carrying that decision's exact key closes it: a later \`done\` or \`working\` event never does, even when the answer is what started that work.
+The main firstmate's answer normally writes that closing line at answer time; when a blocker or wait clears WITHOUT an answer from the main firstmate, append \`resolved: {how it cleared}\` yourself (keyed with \`[key=<slug>]\` if you opened it with one) as your domain resumes.
 Routine internal supervision, heartbeats, retries, and crewmate churn stay inside your own home and must not touch that status file.
 
 # Definition of done
@@ -329,7 +372,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
-   When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
+   A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
@@ -337,7 +381,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
-Before reporting done, read and follow \`$FM_ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+If your deliverable is a visual artifact the captain will review and iterate on, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) instead of handing it back to firstmate.
+Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
@@ -393,7 +438,7 @@ Do not hand-edit, commit, or fix findings yourself while a run is active - the p
 
 Two firstmate-specific rules layer on top of that guidance:
 - ask-user findings are never yours to answer: escalate to firstmate (rule 6) and stop.
-  Firstmate applies the authority contract in its \`AGENTS.md\` and obtains any required captain decision.
+  Firstmate applies \`ask-user-authority\` and obtains any required captain decision.
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
 - Avoid \`--yes\`: it would silently bypass firstmate's authority check and any required captain escalation.
 
@@ -406,6 +451,44 @@ esac
 # $(...) command substitution used to strip. Drop that one newline so generated
 # briefs stay byte-identical to the historical Bash 5 output.
 DOD=${DOD%$'\n'}
+
+# The worker-facing half of the proof contract. It opens with the fixed
+# machine-readable "Proof contract: <demonstrable|none>" line that
+# bin/fm-spawn.sh derives state/<id>.meta's proof= from, exactly as it derives
+# the delivery mode from the line above - deriving rather than cross-checking,
+# so the worker's instructions and the task record cannot disagree.
+# The requirement is deliberately capture-and-durability and nothing more: the
+# selected delivery path already owns rigor (AGENTS.md section 7) and already
+# emits this evidence, so asking for a second verification pass here would both
+# duplicate that path and stack a gate around it.
+if [ "$PROOF" = none ]; then
+  RULE2='2. Stay inside this worktree; the only file you may write outside it is the status file below.'
+  IFS= read -r -d '' PROOF_SECTION <<EOF || true
+# Proof of what shipped
+Proof contract: none
+Proof declaration: $PROOF_DECLARATION
+
+This task was declared NOT demonstrable at intake, for the reason above.
+Produce no evidence bundle for it and do not create \`$DATA/$ID/proof/\`.
+Manufactured screenshots for a refactor, a dependency bump, or a docs fix teach every reader to skim the evidence, and then the real proof gets skimmed too.
+If the work turns out to change something a person can actually see, say so in a status line instead of inventing artifacts.
+EOF
+else
+  RULE2='2. Stay inside this worktree; the only files you may write outside it are the status file below and the evidence bundle the Proof section requires.'
+  IFS= read -r -d '' PROOF_SECTION <<EOF || true
+# Proof of what shipped
+Proof contract: demonstrable
+Proof declaration: $PROOF_DECLARATION
+
+This task declared at intake what would prove it, and that proof has to survive the cleanup that follows.
+Before the FINAL \`done:\` line in the Definition of done below, copy the evidence this work already produced into \`$DATA/$ID/proof/\`: screenshots, before/after transcripts, command output, request and response logs, whatever you actually have.
+Most of it falls out of the run you already do, so capture it once that evidence exists rather than creating the directory early.
+This is capture and durability, NOT an extra verification pass: run no new checks to satisfy it, and never manufacture an artifact for something the work did not produce.
+Anything left in a temporary directory is gone at cleanup and any PR link pointing into one rots with it, so link that durable path instead.
+Add a short \`notes.md\` beside the files saying what each one shows and which claim it supports.
+EOF
+fi
+PROOF_SECTION=${PROOF_SECTION%$'\n'}
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -426,7 +509,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+$RULE2
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
@@ -443,8 +526,9 @@ $RULE1
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions, ask-user findings),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will apply the configured authority and reply with the decision.
-   When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
+   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
+   A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
@@ -455,6 +539,8 @@ Record only project knowledge useful to almost every future session.
 For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
 If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
 Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+
+$PROOF_SECTION
 
 $DOD
 EOF

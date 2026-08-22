@@ -12,7 +12,15 @@
 # read the scout's report (AGENTS.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never looks it up.
 # no-mistakes-prod-only is a registry policy rather than a task mode and is refused.
+# Promotion is equally this task's PROOF intake, so exactly one of --proof or
+# --proof-none is REQUIRED too and recorded as proof=/proof_declaration= beside
+# the flip. Without it a promoted scout would be the one ship task that reaches
+# teardown with nothing declared, which is a hole rather than a shortcut.
+# bin/fm-proof.sh owns the contract; the printed next: step carries the capture
+# path into the ship instructions, since the promoted worker still holds a scout
+# brief and would otherwise never learn where its evidence has to land.
 # Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>
+#          (--proof <what would prove this> | --proof-none <why it is not demonstrable>)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,10 +28,30 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-public-followup-lib.sh
+. "$SCRIPT_DIR/fm-public-followup-lib.sh"
+# shellcheck source=bin/fm-secondmate-parent-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
 MODE=
 YOLO=
 MODE_SET=0
 YOLO_SET=0
+PROOF=
+PROOF_DECLARATION=
+PROOF_FLAGS=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -34,6 +62,8 @@ for a in "$@"; do
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
+      proof) PROOF=demonstrable; PROOF_DECLARATION=$a; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+      proof-none) PROOF=none; PROOF_DECLARATION=$a; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
     esac
     want_value=
     continue
@@ -43,17 +73,21 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --yolo) want_value=yolo ;;
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
+    --proof) want_value=proof ;;
+    --proof=*) PROOF=demonstrable; PROOF_DECLARATION=${a#--proof=}; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+    --proof-none) want_value=proof-none ;;
+    --proof-none=*) PROOF=none; PROOF_DECLARATION=${a#--proof-none=}; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
     *) POS+=("$a") ;;
   esac
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
-[ "${#POS[@]}" -ge 1 ] || { echo "usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>" >&2; exit 1; }
+[ "${#POS[@]}" -ge 1 ] || { echo "usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> (--proof <what would prove this> | --proof-none <why it is not demonstrable>)" >&2; exit 1; }
 [ "$MODE_SET" -eq 1 ] || {
   echo "error: promotion requires --mode <no-mistakes|direct-PR|local-only>; decide it now from the scout's findings and the project's registered posture in data/projects.md" >&2
   exit 1
 }
 [ "$YOLO_SET" -eq 1 ] || {
-  echo "error: promotion requires --yolo <on|off>; it is this task's routine approval authority, not a project lookup" >&2
+  echo "error: promotion requires --yolo <on|off>; it is this task's merge authority, not a project lookup" >&2
   exit 1
 }
 case "$MODE" in
@@ -67,22 +101,180 @@ case "$YOLO" in
   on|off) ;;
   *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
 esac
+[ "$PROOF_FLAGS" -ne 0 ] || {
+  echo "error: promotion requires --proof <what would prove this task> or --proof-none <why it is not demonstrable>; decide it now, from the scout's findings, not after the implementation (bin/fm-proof.sh)" >&2
+  exit 1
+}
+[ "$PROOF_FLAGS" -eq 1 ] || {
+  echo "error: pass exactly one of --proof or --proof-none; a task is either demonstrable or it is not" >&2
+  exit 1
+}
+[ -n "$PROOF_DECLARATION" ] || { echo "error: the proof declaration must not be empty" >&2; exit 1; }
+case "$PROOF_DECLARATION" in
+  *$'\n'*|*$'\r'*) echo "error: the proof declaration must be one line" >&2; exit 1 ;;
+esac
 
-"$FM_ROOT/bin/fm-guard.sh" || true
 ID=${POS[0]}
+fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+CONTROL_LOCK="$STATE/.control-$ID.lock"
+CONTROL_LOCK_HELD=0
+META_LOCK=
+META_LOCK_HELD=0
+TMP=
+promote_cleanup() {
+  local status=$?
+  [ -z "$TMP" ] || rm -f -- "$TMP" 2>/dev/null || true
+  if [ "$META_LOCK_HELD" = 1 ]; then
+    META_LOCK_HELD=0
+    fm_lock_release "$META_LOCK" || true
+  fi
+  if [ "$CONTROL_LOCK_HELD" = 1 ]; then
+    CONTROL_LOCK_HELD=0
+    fm_lock_release "$CONTROL_LOCK" || true
+  fi
+  return "$status"
+}
+trap promote_cleanup EXIT
+fm_lock_try_acquire "$CONTROL_LOCK" || {
+  echo "error: another lifecycle action is already running for task $ID; nothing was changed" >&2
+  exit 1
+}
+CONTROL_LOCK_HELD=1
+"$FM_ROOT/bin/fm-guard.sh" || true
 META="$STATE/$ID.meta"
+[ -d "$STATE" ] || { echo "error: state dir not found: $STATE" >&2; exit 1; }
+META_LOCK=$(fm_meta_lock_path "$META") || exit 1
+fm_lock_acquire_wait "$META_LOCK"
+META_LOCK_HELD=1
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
 grep -qx 'kind=scout' "$META" || { echo "error: task $ID is not a scout task (kind=scout not in meta)" >&2; exit 1; }
 
-TMP="$META.tmp"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
+TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
+grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^proof=' -e '^proof_declaration=' "$META" > "$TMP"
 {
   echo "kind=ship"
   echo "mode=$MODE"
   echo "yolo=$YOLO"
+  echo "proof=$PROOF"
+  echo "proof_declaration=$PROOF_DECLARATION"
 } >> "$TMP"
 mv "$TMP" "$META"
+TMP=
+fm_lock_release "$META_LOCK"
+META_LOCK_HELD=0
 
 HOME_Q=$(printf '%q' "$FM_HOME")
-echo "promoted $ID to ship mode=$MODE yolo=$YOLO (teardown protection restored)"
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+echo "promoted $ID to ship mode=$MODE yolo=$YOLO proof=$PROOF (teardown protection restored)"
+# The promoted worker still holds a SCOUT brief, so the capture path has to
+# travel in the ship instructions or it never learns where its evidence must
+# land - and ship teardown would then refuse on a bundle nobody asked for.
+if [ "$PROOF" = demonstrable ]; then
+  PROMOTE_PROOF_STEP="; before the final done: line, copy the evidence this work already produces (it is capture, not a new verification pass) into $DATA/$ID/proof/ so it survives cleanup, and link that path rather than any temporary one"
+else
+  PROMOTE_PROOF_STEP="; this task is declared not demonstrable ($PROOF_DECLARATION), so produce no evidence bundle for it"
+fi
+PROMOTE_SHIP_INSTRUCTIONS="<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done$PROMOTE_PROOF_STEP>"
+echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID $(shell_quote "$PROMOTE_SHIP_INSTRUCTIONS")"
+
+promote_print_rechain_hint() {
+  local consent_home=$1 work_home=$2 task_id=$3 id prefix
+  prefix=
+  [ "$consent_home" = "$FM_HOME" ] || prefix="FM_HOME=$(printf '%q' "$consent_home") "
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    [ "$(fm_pf_registry_get "$consent_home/state" "$id" state)" = delivered ] || continue
+    echo "next: ${prefix}bin/fm-public-followup.sh rechain <new-obligation-id> --from $id --work-home $work_home --work-id $task_id --expected pr-merged"
+  done <<EOF
+$(fm_pf_registry_ids_for_work "$consent_home/state" "$work_home" "$task_id")
+EOF
+}
+
+promote_canonical_home() {
+  local home=$1
+  case "$home" in /*) ;; *) return 1 ;; esac
+  CDPATH='' cd -- "$home" 2>/dev/null && pwd -P
+}
+
+promote_resolve_primary_home() {
+  local parent=$1 child=$2 mate_id=$3 parent_meta registry meta_home
+  fm_pf_home_id_valid "secondmate:$mate_id" || return 1
+  parent=$(promote_canonical_home "$parent") || return 1
+  child=$(promote_canonical_home "$child") || return 1
+  [ "$parent" != "$child" ] || return 1
+  parent_meta="$parent/state/$mate_id.meta"
+  [ -f "$parent_meta" ] && [ ! -L "$parent_meta" ] || return 1
+  [ "$(fmx_meta_get "$parent_meta" kind)" = secondmate ] || return 1
+  meta_home=$(fmx_meta_get "$parent_meta" home)
+  meta_home=$(CDPATH='' cd -- "$meta_home" 2>/dev/null && pwd -P) || return 1
+  [ "$meta_home" = "$child" ] || return 1
+  registry="$parent/data/secondmates.md"
+  secondmate_registry_validate_bindings "$registry" secondmate_registry_path_key \
+    "$mate_id" "$child" || return 1
+  printf '%s\n' "$parent"
+}
+
+promote_warn_parent_unresolved() {
+  echo "warning: could not resolve the consent-holding parent home for secondmate $1; promotion succeeded, but any open public loop must be inspected and rechained from the parent." >&2
+}
+
+if [ -f "$FM_HOME/.fm-secondmate-home" ]; then
+  PROMOTE_MATE_ID=$(sed -n '1p' "$FM_HOME/.fm-secondmate-home" 2>/dev/null || true)
+  PROMOTE_PARENT_RECORD=absent
+  PROMOTE_PARENT_ROUTE=
+  PROMOTE_DURABLE_PARENT=
+  if [ -e "$FM_HOME/.fm-secondmate-parent" ] || [ -L "$FM_HOME/.fm-secondmate-parent" ]; then
+    PROMOTE_PARENT_RECORD=invalid
+    if fm_secondmate_parent_record_parse "$FM_HOME/.fm-secondmate-parent"; then
+      PROMOTE_PARENT_RECORD=valid
+      PROMOTE_PARENT_ROUTE=$FM_SECONDMATE_PARENT_ROUTE
+      PROMOTE_DURABLE_PARENT=$FM_SECONDMATE_PARENT_HOME
+    fi
+  fi
+  if [ "$PROMOTE_PARENT_RECORD" = invalid ]; then
+    promote_warn_parent_unresolved "$PROMOTE_MATE_ID"
+  elif [ "$PROMOTE_PARENT_ROUTE" = local ]; then
+    PROMOTE_PARENT_CANDIDATE=${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-$PROMOTE_DURABLE_PARENT}
+    PROMOTE_PARENT_BINDINGS_MATCH=1
+    if [ -n "${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-}" ]; then
+      PROMOTE_LIVE_PARENT=$(promote_canonical_home "$FM_PUBLIC_FOLLOWUP_PRIMARY_HOME") \
+        || PROMOTE_PARENT_BINDINGS_MATCH=0
+      PROMOTE_RECORDED_PARENT=$(promote_canonical_home "$PROMOTE_DURABLE_PARENT") \
+        || PROMOTE_PARENT_BINDINGS_MATCH=0
+      if [ "$PROMOTE_PARENT_BINDINGS_MATCH" = 1 ] \
+          && [ "$PROMOTE_LIVE_PARENT" != "$PROMOTE_RECORDED_PARENT" ]; then
+        PROMOTE_PARENT_BINDINGS_MATCH=0
+      fi
+    fi
+    if [ "$PROMOTE_PARENT_BINDINGS_MATCH" = 1 ] \
+        && PROMOTE_PARENT=$(promote_resolve_primary_home \
+          "$PROMOTE_PARENT_CANDIDATE" "$FM_HOME" "$PROMOTE_MATE_ID"); then
+      if fm_pf_relay_active "$PROMOTE_PARENT"; then
+        promote_print_rechain_hint "$PROMOTE_PARENT" "secondmate:$PROMOTE_MATE_ID" "$ID"
+      fi
+    else
+      promote_warn_parent_unresolved "$PROMOTE_MATE_ID"
+    fi
+  elif [ "$PROMOTE_PARENT_ROUTE" = remote ]; then
+    PROMOTE_HOME_ENV_TOKEN=
+    if [ -f "$FM_HOME/.env" ]; then
+      PROMOTE_HOME_ENV_TOKEN=$(fmx_env_get FMX_PAIRING_TOKEN "$FM_HOME/.env")
+    fi
+    if [ -n "$PROMOTE_HOME_ENV_TOKEN" ]; then
+      promote_warn_parent_unresolved "$PROMOTE_MATE_ID"
+    fi
+  elif [ -n "${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-}" ]; then
+    if fm_pf_relay_active "$FM_PUBLIC_FOLLOWUP_PRIMARY_HOME"; then
+      if PROMOTE_PARENT=$(promote_resolve_primary_home \
+          "$FM_PUBLIC_FOLLOWUP_PRIMARY_HOME" "$FM_HOME" "$PROMOTE_MATE_ID"); then
+        promote_print_rechain_hint "$PROMOTE_PARENT" "secondmate:$PROMOTE_MATE_ID" "$ID"
+      else
+        promote_warn_parent_unresolved "$PROMOTE_MATE_ID"
+      fi
+    fi
+  elif fm_pf_relay_active "$FM_HOME"; then
+    promote_warn_parent_unresolved "$PROMOTE_MATE_ID"
+  fi
+elif fm_pf_relay_active "$FM_HOME"; then
+  promote_print_rechain_hint "$FM_HOME" main "$ID"
+fi

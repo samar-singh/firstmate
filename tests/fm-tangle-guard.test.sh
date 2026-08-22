@@ -24,11 +24,12 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-tangle-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
-# A fresh git repo on `main` with one commit. Echoes its path.
+# A fresh git repo on `main` with one commit and a local origin. Echoes its path.
 make_repo() {
   local dir=$1
   git init -q -b main "$dir"
   git -C "$dir" commit -q --allow-empty -m init
+  fm_git_add_origin "$dir" "$dir.origin.git"
   printf '%s\n' "$dir"
 }
 
@@ -127,7 +128,7 @@ test_brief_assertion_precedes_branch() {
   local home brief iso br
   home="$TMP_ROOT/brief-home"
   mkdir -p "$home/data"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" tangle-brief-cc3 alpha --mode no-mistakes >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" tangle-brief-cc3 alpha --mode no-mistakes --proof-none 'fixture: no user-visible surface' >/dev/null 2>&1
   brief="$home/data/tangle-brief-cc3/brief.md"
   assert_present "$brief" "brief was not scaffolded"
   assert_grep "blocked: launched in primary checkout, not an isolated worktree" "$brief" \
