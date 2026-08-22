@@ -282,6 +282,8 @@ test_relaunch_preserves_durable_task_metadata() {
     printf '%s\n' 'pr_head=feature/relaunch'
     printf '%s\n' 'x_request=request-19'
     printf '%s\n' 'decisions_reviewed=1'
+    printf '%s\n' 'proof=demonstrable'
+    printf '%s\n' 'proof_declaration=the banner disappears after dismissal'
   } >> "$dir/home/state/rl19.meta"
 
   out=$(run_control "$dir" rl19 relaunch --note "continuing review work"); rc=$?
@@ -294,6 +296,16 @@ test_relaunch_preserves_durable_task_metadata() {
     || fail "the task X request must survive relaunch"
   [ "$(meta_field "$dir" rl19 decisions_reviewed)" = 1 ] \
     || fail "the task decision state must survive relaunch"
+  # The proof declaration means INTAKE, so it must be carried forward rather
+  # than re-derived from a brief that may have been edited since - and this
+  # fixture's brief declares no proof contract at all, so re-deriving would
+  # silently erase what was declared. Exactly one record, never a duplicate.
+  [ "$(meta_field "$dir" rl19 proof)" = demonstrable ] \
+    || fail "the task's intake proof declaration must survive relaunch"
+  [ "$(meta_field "$dir" rl19 proof_declaration)" = "the banner disappears after dismissal" ] \
+    || fail "the declaration text must survive relaunch"
+  [ "$(grep -c '^proof=' "$dir/home/state/rl19.meta")" = 1 ] \
+    || fail "a relaunch duplicated the proof declaration"
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
 }
 
@@ -1249,7 +1261,12 @@ test_promotion_participates_in_the_lifecycle_lock_before_metadata_resolution() {
     i=$((i + 1))
   done
   [ -e "$lock" ] || fail "could not stage the promotion lifecycle lock"
-  out=$(FM_HOME="$dir/home" "$PROMOTE" rl29 --mode direct-PR --yolo on 2>&1); rc=$?
+  # Every argument this promotion consumes is supplied, so the ONLY thing left
+  # to refuse is the held lifecycle lock. Argument validation deliberately runs
+  # before the lock (a typo should not have to take one); the property guarded
+  # here is that no TASK METADATA is interpreted until the lock is held.
+  out=$(FM_HOME="$dir/home" "$PROMOTE" rl29 --mode direct-PR --yolo on \
+    --proof-none 'fixture: no user-visible surface' 2>&1); rc=$?
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
   expect_code 1 "$rc" "promotion should refuse a concurrent lifecycle action"

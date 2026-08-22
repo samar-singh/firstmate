@@ -40,11 +40,14 @@ make_home() {  # <name> [<registry-line>...]
   printf '%s\n' "$home|$projects/proj|$fakebin"
 }
 
-write_brief() {  # <home> <id> [<recorded-mode>]
-  local home=$1 id=$2 mode=${3:-}
+write_brief() {  # <home> <id> [<recorded-mode>] [<proof-contract>] [<proof-declaration>]
+  local home=$1 id=$2 mode=${3:-} proof=${4:-} declaration=${5:-}
   mkdir -p "$home/data/$id"
   {
-    printf 'You are a crewmate.\n\n# Definition of done\n'
+    printf 'You are a crewmate.\n\n# Proof of what shipped\n'
+    [ -z "$proof" ] || printf 'Proof contract: %s\n' "$proof"
+    [ -z "$declaration" ] || printf 'Proof declaration: %s\n' "$declaration"
+    printf '\n# Definition of done\n'
     [ -z "$mode" ] || printf 'Delivery contract: mode=%s\n' "$mode"
   } > "$home/data/$id/brief.md"
 }
@@ -227,9 +230,10 @@ test_promote_requires_and_records_the_delivery_contract() {
   [ "$status" -ne 0 ] || fail "promotion on a conditional policy should exit non-zero"
   assert_contains "$out" "classify this task's surface" "promote did not refuse the conditional policy as a task mode"
 
-  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" promote-d1 --mode direct-PR --yolo on 2>&1)
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" promote-d1 --mode direct-PR --yolo on \
+    --proof-none 'fixture: no user-visible surface' 2>&1)
   status=$?
-  expect_code 0 "$status" "a promotion carrying both flags should succeed"
+  expect_code 0 "$status" "a promotion carrying every required flag should succeed"
   assert_grep 'kind=ship' "$meta" "promotion did not restore ship teardown protection"
   assert_grep 'mode=direct-PR' "$meta" "promotion did not record the decided delivery mode"
   assert_grep 'yolo=on' "$meta" "promotion did not record the decided merge posture"
@@ -272,11 +276,91 @@ EOF
   pass "fm-project-mode: the conditional policy is accepted, mapped for mechanical callers, and readable raw"
 }
 
+# A brief scaffolded before the gate existed must still dispatch - refusing here
+# would wedge live work mid-flight - but it must say so, exactly as the older
+# missing delivery contract line already does.
+test_ship_spawn_grandfathers_a_brief_with_no_proof_contract() {
+  local rec home proj fakebin out
+  rec=$(make_home proof-grandfather)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  write_brief "$home" proof-old-e3 no-mistakes
+  out=$(run_spawn "$home" "$fakebin" proof-old-e3 "$proj" claude --mode no-mistakes --yolo off)
+  assert_contains "$out" "declares no proof contract" \
+    "a brief predating the proof declaration launched without a word"
+  pass "fm-spawn: a brief predating the proof declaration is warned about, not refused"
+}
+
+# A record this spawn cannot read is worse than none: it would be recorded and
+# then fail the teardown gate for a reason nobody could act on.
+test_ship_spawn_refuses_an_unreadable_proof_contract() {
+  local rec home proj fakebin out status
+  rec=$(make_home proof-garbled)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  write_brief "$home" proof-bad-e4 no-mistakes maybe 'who knows'
+  out=$(run_spawn "$home" "$fakebin" proof-bad-e4 "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unrecognized proof contract launched anyway"
+  assert_contains "$out" "unrecognized proof contract" "the refusal did not name the bad value"
+  assert_absent "$home/state/proof-bad-e4.meta" "a refused spawn wrote task metadata"
+
+  write_brief "$home" proof-bad-e5 no-mistakes demonstrable
+  out=$(run_spawn "$home" "$fakebin" proof-bad-e5 "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a declared-but-unstated proof contract launched anyway"
+  assert_contains "$out" "no 'Proof declaration:' line" "the refusal did not name the missing declaration"
+  pass "fm-spawn: a malformed proof contract stops the spawn rather than recording nonsense"
+}
+
+# Promoting a scout in place IS that task's ship intake. Without the same
+# requirement, promotion would be the one route to a ship task that reaches
+# teardown having declared nothing.
+test_promote_requires_and_records_the_proof_declaration() {
+  local home meta out status
+  home="$TMP_ROOT/promote-proof/home"
+  mkdir -p "$home/state"
+  meta="$home/state/promote-p1.meta"
+  printf 'window=fm-promote-p1\nkind=scout\nworktree=/tmp/wt\n' > "$meta"
+
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" promote-p1 \
+    --mode direct-PR --yolo off 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "promotion without a proof declaration should exit non-zero"
+  assert_contains "$out" "promotion requires --proof" "promote refusal did not name the missing declaration"
+  assert_grep 'kind=scout' "$meta" "refused promotion still changed the task record"
+
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" promote-p1 \
+    --mode direct-PR --yolo off --proof 'x' --proof-none 'y' 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "promotion carrying both proof legs should exit non-zero"
+  assert_contains "$out" "exactly one of --proof or --proof-none" "promote accepted a contradictory declaration"
+
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" promote-p1 \
+    --mode direct-PR --yolo off --proof 'the duplicate rows are gone from the invoice list' 2>&1)
+  expect_code 0 "$?" "a promotion carrying a proof declaration should succeed"
+  assert_grep 'proof=demonstrable' "$meta" "promotion did not record the proof contract"
+  assert_grep 'proof_declaration=the duplicate rows are gone from the invoice list' "$meta" \
+    "promotion did not record the declaration verbatim"
+  [ "$(grep -c '^proof=' "$meta")" = 1 ] || fail "promotion left more than one proof= line in the task record"
+  # The promoted worker still holds a SCOUT brief, so the capture path can only
+  # reach it through these instructions.
+  assert_contains "$out" "$home/data/promote-p1/proof/" \
+    "the promotion hint did not carry the capture path into the ship instructions"
+  pass "fm-promote: promotion requires the proof declaration and carries the capture path onward"
+}
+
+
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch
 test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
+test_ship_spawn_grandfathers_a_brief_with_no_proof_contract
+test_ship_spawn_refuses_an_unreadable_proof_contract
+test_promote_requires_and_records_the_proof_declaration
 test_project_mode_maps_the_conditional_policy
 echo "# all fm-task-delivery tests passed"

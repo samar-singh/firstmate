@@ -5,6 +5,9 @@
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
+# On success it also prints this task's one-line proof handover (bin/fm-proof.sh
+# show), so the evidence reaches the captain WITH the PR link instead of after
+# the captain asks for it.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -137,3 +140,11 @@ fm_pr_poll_publish_prepared || {
   exit 1
 }
 printf 'armed: state/%s.check.sh\n' "$ID"
+# Hand the proof over WITH the link. The captain having to ask "show me proof"
+# after a PR lands is the delivery half of the same failure the gate in
+# bin/fm-proof.sh closes, and this is the one moment firstmate holds both the PR
+# URL and the task id. Advisory only: a home that cannot read the declaration
+# still has its PR armed.
+# Same FM_HOME / FM_STATE_OVERRIDE / FM_DATA_OVERRIDE resolution as this script,
+# so it needs no explicit pass-through.
+"$SCRIPT_DIR/fm-proof.sh" show "$ID" 2>/dev/null || true

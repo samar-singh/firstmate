@@ -76,7 +76,7 @@ make_case() {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
 
   # Mocks for the post-check teardown steps. Refuse logic exits before these
   # run; the ALLOW cases need them so the script can complete cleanly.
@@ -540,10 +540,14 @@ SH
 }
 
 # Run teardown with PATH mocking. Args: case_dir [extra args...]
+# FM_DATA_OVERRIDE keeps the per-task data directory inside the case sandbox.
+# Without it, DATA resolves under FM_ROOT_OVERRIDE and the ship proof gate would
+# read the real home's data/ instead of this case's.
 run_teardown() {
   local case_dir=$1; shift
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
     "$TEARDOWN" task-x1 "$@"
@@ -561,6 +565,167 @@ make_path_without_lsof() {  # <case-dir>
   done
   printf '%s\n' "$path_dir"
 }
+
+# --- ship proof gate (bin/fm-proof.sh) --------------------------------------
+#
+# The ship half of the guarantee the scout report gate has always given. These
+# drive the real teardown: nothing here inspects the gate's source.
+
+# Put a landed ship task with the given proof record in front of teardown, so
+# every case below differs ONLY in what was declared and what survived.
+make_proof_case() {  # <name> [meta-line...]
+  local case_dir=$1; shift
+  case_dir=$(make_case "$case_dir")
+  write_meta "$case_dir" no-mistakes ship
+  local line
+  for line in "$@"; do
+    printf '%s\n' "$line" >> "$case_dir/state/task-x1.meta"
+  done
+  # Landed work, so nothing but the proof gate can refuse.
+  wt_commit "$case_dir" "the shipped change"
+  add_fork_with_pushed_branch "$case_dir"
+  printf '%s\n' "$case_dir"
+}
+
+test_ship_proof_gate_refuses_demonstrable_without_proof() {
+  local case_dir rc
+  case_dir=$(make_proof_case proof-missing \
+    "proof=demonstrable" "proof_declaration=the list page shows the new column")
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "proof-missing: teardown erased a demonstrable ship task with no surviving proof"
+  assert_grep "REFUSED" "$case_dir/stderr" "proof-missing: refusal was not announced"
+  assert_grep "the list page shows the new column" "$case_dir/stderr" \
+    "proof-missing: refusal did not name what was declared"
+  assert_grep "$case_dir/data/task-x1/proof" "$case_dir/stderr" \
+    "proof-missing: refusal did not name where the evidence belongs"
+  assert_grep "bin/fm-proof.sh waive" "$case_dir/stderr" \
+    "proof-missing: refusal did not say how to satisfy it honestly"
+  assert_present "$case_dir/wt" "proof-missing: the worktree was removed despite the refusal"
+  pass "ship teardown refuses a demonstrable task whose declared proof did not survive"
+}
+
+test_ship_proof_gate_passes_once_proof_is_durable() {
+  local case_dir rc
+  case_dir=$(make_proof_case proof-present \
+    "proof=demonstrable" "proof_declaration=the list page shows the new column")
+  mkdir -p "$case_dir/data/task-x1/proof"
+  printf 'before: no column. after: column present.\n' > "$case_dir/data/task-x1/proof/notes.md"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "proof-present: teardown refused a task whose proof is durable"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "proof-present: teardown printed a REFUSED line"
+  assert_present "$case_dir/data/task-x1/proof/notes.md" "proof-present: teardown destroyed the evidence bundle"
+  pass "ship teardown passes once the declared proof is durable, and leaves the bundle behind"
+}
+
+# An empty placeholder is not evidence. This also pins the byte-size check
+# against the BSD/GNU `find -size` unit difference.
+test_ship_proof_gate_rejects_an_empty_placeholder() {
+  local case_dir rc
+  case_dir=$(make_proof_case proof-empty \
+    "proof=demonstrable" "proof_declaration=the export produces a populated file")
+  mkdir -p "$case_dir/data/task-x1/proof"
+  : > "$case_dir/data/task-x1/proof/screenshot.png"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "proof-empty: an empty placeholder file satisfied the proof gate"
+  assert_grep "no non-empty file" "$case_dir/stderr" "proof-empty: refusal did not explain the emptiness"
+  pass "ship teardown does not accept an empty placeholder as proof"
+}
+
+# The escape hatch has to be first class: a refactor, a dependency bump, or a
+# docs fix must tear down with no artifacts AND no warning noise, or readers
+# learn to skim every evidence line.
+test_ship_proof_gate_passes_non_demonstrable_silently() {
+  local case_dir rc
+  case_dir=$(make_proof_case proof-none \
+    "proof=none" "proof_declaration=internal lint configuration with no user-visible surface")
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "proof-none: teardown refused an explicitly non-demonstrable task"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "proof-none: teardown printed a REFUSED line"
+  # "fm-proof:" is the gate's own message prefix. A bare "proof" match would
+  # also hit unrelated text such as a branch name in the worktree-tangle banner.
+  assert_no_grep "fm-proof:" "$case_dir/stderr" "proof-none: a clean attestation still produced proof warning noise"
+  assert_absent "$case_dir/data/task-x1/proof" "proof-none: teardown expected an evidence bundle anyway"
+  pass "ship teardown passes an explicitly non-demonstrable task silently, with no artifacts"
+}
+
+# Silence is not an attestation. A task spawned before the gate existed must not
+# wedge, but it must also be visibly distinguishable from proof=none above.
+test_ship_proof_gate_grandfathers_an_undeclared_task_loudly() {
+  local case_dir rc
+  case_dir=$(make_proof_case proof-undeclared)
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "proof-undeclared: an in-flight task predating the gate was wedged"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "proof-undeclared: teardown printed a REFUSED line"
+  assert_grep "no proof declaration" "$case_dir/stderr" \
+    "proof-undeclared: an undeclared task passed as quietly as an explicit attestation"
+  pass "ship teardown grandfathers an undeclared task with a warning, never silently"
+}
+
+# A recorded waiver is the honest late answer, and stays visible every time.
+test_ship_proof_gate_reports_a_waiver() {
+  local case_dir rc
+  case_dir=$(make_proof_case proof-waived \
+    "proof=waived" "proof_declaration=scope narrowed mid-flight to an internal script")
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "proof-waived: a recorded waiver did not let teardown proceed"
+  assert_grep "scope narrowed mid-flight" "$case_dir/stderr" \
+    "proof-waived: the waiver passed without naming its recorded reason"
+  pass "ship teardown honours a recorded proof waiver and keeps announcing it"
+}
+
+# A scout is governed by its report gate, not this one.
+test_ship_proof_gate_does_not_touch_scouts() {
+  local case_dir rc
+  case_dir=$(make_case proof-scout)
+  write_meta "$case_dir" no-mistakes scout
+  mkdir -p "$case_dir/data/task-x1"
+  printf 'findings\n' > "$case_dir/data/task-x1/report.md"
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=firstmate:fm-task-x1" "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/wt" "project=$case_dir/project" \
+    "kind=scout" "mode=no-mistakes" "decisions_reviewed=1" "decision_keys="
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  assert_no_grep "fm-proof:" "$case_dir/stderr" "proof-scout: the ship proof gate spoke about a scout task"
+  [ "$rc" -eq 0 ] || assert_no_grep "declared what would prove it" "$case_dir/stderr" \
+    "proof-scout: a scout was refused by the ship proof gate"
+  pass "the ship proof gate leaves scout teardown to its own report gate"
+}
+
 
 test_local_only_fork_remote_allows() {
   local case_dir rc
@@ -2592,6 +2757,13 @@ EOF
 }
 
 test_local_only_fork_remote_allows
+test_ship_proof_gate_refuses_demonstrable_without_proof
+test_ship_proof_gate_passes_once_proof_is_durable
+test_ship_proof_gate_rejects_an_empty_placeholder
+test_ship_proof_gate_passes_non_demonstrable_silently
+test_ship_proof_gate_grandfathers_an_undeclared_task_loudly
+test_ship_proof_gate_reports_a_waiver
+test_ship_proof_gate_does_not_touch_scouts
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses

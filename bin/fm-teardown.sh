@@ -29,6 +29,10 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# Ship tasks carry the matching guarantee for the change they shipped: teardown
+# refuses to erase one whose declared proof did not survive at
+# data/<task-id>/proof/. bin/fm-proof.sh's header owns that contract and every
+# outcome of it; --force skips this gate with the other work checks.
 # Before destructive cleanup, teardown validates task check artifacts and any
 # matching quarantine entries as ordinary single-link files on the state
 # device. It refuses and preserves task state when that proof fails; otherwise
@@ -56,7 +60,7 @@
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force]
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
-#   checks, and discards secondmate child work for kind=secondmate. Only use it
+#   checks and the ship proof gate, and discards secondmate child work for kind=secondmate. Only use it
 #   when the captain has explicitly said to discard the work.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
@@ -2325,6 +2329,21 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2
     echo "Inventory its report and any visual review through bin/fm-captain-hold.sh before teardown." >&2
+    exit 1
+  fi
+fi
+
+# The ship half of the same guarantee, beside the scout gate above: a scout was
+# always promised a surviving artifact and a ship task was promised none.
+# bin/fm-proof.sh owns the contract and decides every outcome; this call only
+# relays its verdict, and its stderr carries the reason and the remedy.
+# Placed here deliberately - ahead of every backend-specific step below - so a
+# refusal happens before anything is destroyed, on every runtime backend. The
+# check reads task metadata and a data directory only, never harness output.
+if [ "$KIND" = ship ] && [ "$FORCE" != "--force" ]; then
+  if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+      "$SCRIPT_DIR/fm-proof.sh" verify "$ID" >/dev/null; then
+    echo "REFUSED: ship task $ID declared what would prove it, and no such proof survives." >&2
     exit 1
   fi
 fi

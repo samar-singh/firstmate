@@ -288,6 +288,8 @@ A current explicit captain instruction wins; otherwise the project's registry en
 On a `no-mistakes-prod-only` project, classify the task's surface: internal-only tooling, automation, contributor or operator process, and release or submission work ships `direct-PR`, while product-facing, mixed, and uncertain work ships `no-mistakes`; never infer internal-only from file location or project name.
 An unregistered project or absent registry resolves to `no-mistakes` with yolo off, and the registration gap goes to the captain.
 Record the resulting mode, `yolo` merge posture, and the one-line reason for any deviation in the backlog item note.
+Declare at the same intake what would prove the task, or attest that it is not demonstrable, passing exactly one of `--proof` or `--proof-none` to the brief and to any scout promotion; both refuse to guess it, and `bin/fm-proof.sh` owns the contract, the durable evidence bundle, and the ship teardown gate.
+An investigation is already guaranteed a surviving artifact and a shipped change was not, so the declaration exists to make the evidence a run already produces outlive cleanup; it never authorizes a verification pass outside the selected delivery path, and forcing artifacts onto genuinely non-demonstrable work is the failure it guards against.
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
@@ -357,7 +359,7 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
 Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
-Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, and the no-mistakes risk level when applicable.
+Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, the proof that command hands back for a demonstrable task, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 

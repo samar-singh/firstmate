@@ -14,6 +14,14 @@
 #   scaffolded before that line existed warns once and launches on the flag. When
 #   the explicit mode carries less rigor than the project's standing posture, a
 #   loud one-line deviation notice is printed and the spawn continues.
+#   A fresh ship spawn also DERIVES this task's proof declaration from the same
+#   brief - its "Proof contract: <demonstrable|none>" and "Proof declaration:"
+#   lines - and records them as proof= and proof_declaration= in state/<id>.meta,
+#   where bin/fm-teardown.sh's ship gate reads them. Derived rather than passed as
+#   a flag, so the worker's instructions and the record cannot disagree; a brief
+#   with no proof contract line warns once and records nothing. A relaunch never
+#   re-derives it: the keys are preserved, keeping the INTAKE declaration
+#   authoritative over any later brief edit. bin/fm-proof.sh owns the contract.
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
@@ -751,6 +759,10 @@ spawn_abort_cleanup() {
             echo "kind=$KIND"
             [ -z "${MODE:-}" ] || echo "mode=$MODE"
             [ -z "${YOLO:-}" ] || echo "yolo=$YOLO"
+            # Guarded reads: this rescue write can run from the trap before the
+            # brief's proof contract has been resolved.
+            [ -z "${SPAWN_PROOF:-}" ] || echo "proof=$SPAWN_PROOF"
+            [ -z "${SPAWN_PROOF:-}" ] || echo "proof_declaration=${SPAWN_PROOF_DECLARATION:-}"
             echo "tasktmp=${TASK_TMP:-}"
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
@@ -1675,6 +1687,39 @@ if [ "$KIND" = ship ]; then
      && [ "$(delivery_rigor_rank "$MODE")" -lt "$(delivery_rigor_rank "$STANDING_MODE")" ]; then
     echo "notice: $ID ships mode=$MODE while the standing posture for $PROJ_NAME is $STANDING_MODE - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state" >&2
   fi
+fi
+
+# Ship proof declaration (bin/fm-proof.sh owns the contract). Derived from the
+# brief rather than cross-checked against a separate spawn flag, so the worker's
+# own instructions and the task record cannot drift apart. Derived only on a
+# FRESH spawn: a relaunch preserves the record it already has (the keys are
+# absent from preserve_relaunch_meta's owned list), which keeps the INTAKE
+# declaration authoritative over any later brief edit, and leaves a promoted
+# scout's declaration - written straight to meta by bin/fm-promote.sh, whose
+# brief is still a scout brief - untouched.
+# A ship brief with no proof contract line is grandfathered with a warning, the
+# same one-release treatment the delivery contract line above already gets: a
+# brief scaffolded before this gate existed must not wedge a dispatch.
+SPAWN_PROOF=
+SPAWN_PROOF_DECLARATION=
+if [ "$KIND" = ship ] && [ "$RELAUNCH" -ne 1 ]; then
+  SPAWN_PROOF=$(sed -n 's/^Proof contract: \([A-Za-z-]*\)[[:space:]]*$/\1/p' "$BRIEF" | head -n 1)
+  SPAWN_PROOF_DECLARATION=$(sed -n 's/^Proof declaration: \(.*\)$/\1/p' "$BRIEF" | head -n 1)
+  case "$SPAWN_PROOF" in
+    '')
+      echo "warning: $BRIEF declares no proof contract (scaffolded before ship briefs declared one); nothing will be enforced about proof for $ID - re-scaffold with --proof or --proof-none if this task should carry one" >&2
+      ;;
+    demonstrable|none)
+      if [ -z "$SPAWN_PROOF_DECLARATION" ]; then
+        echo "error: $BRIEF says 'Proof contract: $SPAWN_PROOF' but carries no 'Proof declaration:' line; re-scaffold the brief with bin/fm-brief.sh so the declaration and the task record agree" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "error: $BRIEF declares an unrecognized proof contract '$SPAWN_PROOF'; it must be demonstrable or none (bin/fm-proof.sh)" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
@@ -2679,6 +2724,10 @@ preserve_relaunch_meta() {
   if [ "$KIND" = secondmate ]; then
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"
+  fi
+  if [ -n "$SPAWN_PROOF" ]; then
+    echo "proof=$SPAWN_PROOF"
+    echo "proof_declaration=$SPAWN_PROOF_DECLARATION"
   fi
   if [ "$RELAUNCH" -eq 1 ]; then
     preserve_relaunch_meta

@@ -6,7 +6,8 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only>
+#          (--proof <what would prove this> | --proof-none <why it is not demonstrable>) [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
@@ -36,6 +37,13 @@
 #                the configured merge authority approves, firstmate merges to local main
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
+# Ship briefs also REQUIRE the proof declaration - exactly one of --proof or
+# --proof-none - and refuse to scaffold without it, because "what would prove
+# this?" is an acceptance criterion at intake and a rationalization afterwards.
+# The generated brief carries a fixed machine-readable "Proof contract:
+# <demonstrable|none>" line, and bin/fm-proof.sh's header owns the whole contract:
+# where the declaration is recorded, where the evidence bundle lives, and how ship
+# teardown gates on it. --proof-none is a complete answer, not a bypass.
 # The generated ship brief records the chosen mode as a fixed machine-readable
 # "Delivery contract: mode=<mode>" line. bin/fm-spawn.sh reads that line and refuses
 # to launch a ship task whose explicit --mode disagrees, so an adjusted brief and the
@@ -106,6 +114,10 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
+PROOF=
+PROOF_DECLARATION=
+PROOF_SET=0
+PROOF_FLAGS=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -115,6 +127,8 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      proof) PROOF=demonstrable; PROOF_DECLARATION=$a; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+      proof-none) PROOF=none; PROOF_DECLARATION=$a; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -127,6 +141,10 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
+    --proof) want_value=proof ;;
+    --proof=*) PROOF=demonstrable; PROOF_DECLARATION=${a#--proof=}; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+    --proof-none) want_value=proof-none ;;
+    --proof-none=*) PROOF=none; PROOF_DECLARATION=${a#--proof-none=}; PROOF_SET=1; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
@@ -152,6 +170,30 @@ if [ "$KIND" = ship ]; then
   esac
 elif [ "$MODE_SET" -eq 1 ]; then
   echo "error: --mode applies only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
+  exit 1
+fi
+
+# The ship proof declaration, decided at intake for the reason bin/fm-proof.sh's
+# header states: asked at the end, "what would prove this?" only rationalizes
+# whatever happened. Asked here it is an acceptance criterion. Either leg is a
+# complete answer, and --proof-none is a first-class attestation rather than a
+# bypass - forcing artifacts onto a refactor, a dependency bump, or a docs fix
+# trains every reader to skim the evidence.
+if [ "$KIND" = ship ]; then
+  [ "$PROOF_SET" -eq 1 ] || {
+    echo "error: ship briefs require --proof <what would prove this task> or --proof-none <why it is not demonstrable>; decide it now, not after the work (bin/fm-proof.sh)" >&2
+    exit 1
+  }
+  [ "$PROOF_FLAGS" -eq 1 ] || {
+    echo "error: pass exactly one of --proof or --proof-none; a task is either demonstrable or it is not" >&2
+    exit 1
+  }
+  [ -n "$PROOF_DECLARATION" ] || { echo "error: the proof declaration must not be empty" >&2; exit 1; }
+  case "$PROOF_DECLARATION" in
+    *$'\n'*|*$'\r'*) echo "error: the proof declaration must be one line" >&2; exit 1 ;;
+  esac
+elif [ "$PROOF_SET" -eq 1 ]; then
+  echo "error: --proof and --proof-none apply only to ship briefs; a scout's report is already its surviving artifact and a secondmate charter ships nothing" >&2
   exit 1
 fi
 ID=${POS[0]}
@@ -410,6 +452,42 @@ esac
 # briefs stay byte-identical to the historical Bash 5 output.
 DOD=${DOD%$'\n'}
 
+# The worker-facing half of the proof contract. It opens with the fixed
+# machine-readable "Proof contract: <demonstrable|none>" line that
+# bin/fm-spawn.sh derives state/<id>.meta's proof= from, exactly as it derives
+# the delivery mode from the line above - deriving rather than cross-checking,
+# so the worker's instructions and the task record cannot disagree.
+# The requirement is deliberately capture-and-durability and nothing more: the
+# selected delivery path already owns rigor (AGENTS.md section 7) and already
+# emits this evidence, so asking for a second verification pass here would both
+# duplicate that path and stack a gate around it.
+if [ "$PROOF" = none ]; then
+  IFS= read -r -d '' PROOF_SECTION <<EOF || true
+# Proof of what shipped
+Proof contract: none
+Proof declaration: $PROOF_DECLARATION
+
+This task was declared NOT demonstrable at intake, for the reason above.
+Produce no evidence bundle for it and do not create \`$DATA/$ID/proof/\`.
+Manufactured screenshots for a refactor, a dependency bump, or a docs fix teach every reader to skim the evidence, and then the real proof gets skimmed too.
+If the work turns out to change something a person can actually see, say so in a status line instead of inventing artifacts.
+EOF
+else
+  IFS= read -r -d '' PROOF_SECTION <<EOF || true
+# Proof of what shipped
+Proof contract: demonstrable
+Proof declaration: $PROOF_DECLARATION
+
+This task declared at intake what would prove it, and that proof has to survive the cleanup that follows.
+Before the FINAL \`done:\` line in the Definition of done below, copy the evidence this work already produced into \`$DATA/$ID/proof/\`: screenshots, before/after transcripts, command output, request and response logs, whatever you actually have.
+Most of it falls out of the run you already do, so capture it once that evidence exists rather than creating the directory early.
+This is capture and durability, NOT an extra verification pass: run no new checks to satisfy it, and never manufacture an artifact for something the work did not produce.
+Anything left in a temporary directory is gone at cleanup and any PR link pointing into one rots with it, so link that durable path instead.
+Add a short \`notes.md\` beside the files saying what each one shows and which claim it supports.
+EOF
+fi
+PROOF_SECTION=${PROOF_SECTION%$'\n'}
+
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -459,6 +537,8 @@ Record only project knowledge useful to almost every future session.
 For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
 If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
 Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+
+$PROOF_SECTION
 
 $DOD
 EOF

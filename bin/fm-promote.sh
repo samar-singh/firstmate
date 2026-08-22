@@ -12,7 +12,15 @@
 # read the scout's report (AGENTS.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never looks it up.
 # no-mistakes-prod-only is a registry policy rather than a task mode and is refused.
+# Promotion is equally this task's PROOF intake, so exactly one of --proof or
+# --proof-none is REQUIRED too and recorded as proof=/proof_declaration= beside
+# the flip. Without it a promoted scout would be the one ship task that reaches
+# teardown with nothing declared, which is a hole rather than a shortcut.
+# bin/fm-proof.sh owns the contract; the printed next: step carries the capture
+# path into the ship instructions, since the promoted worker still holds a scout
+# brief and would otherwise never learn where its evidence has to land.
 # Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>
+#          (--proof <what would prove this> | --proof-none <why it is not demonstrable>)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,6 +43,9 @@ MODE=
 YOLO=
 MODE_SET=0
 YOLO_SET=0
+PROOF=
+PROOF_DECLARATION=
+PROOF_FLAGS=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -45,6 +56,8 @@ for a in "$@"; do
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
+      proof) PROOF=demonstrable; PROOF_DECLARATION=$a; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+      proof-none) PROOF=none; PROOF_DECLARATION=$a; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
     esac
     want_value=
     continue
@@ -54,6 +67,10 @@ for a in "$@"; do
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --yolo) want_value=yolo ;;
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
+    --proof) want_value=proof ;;
+    --proof=*) PROOF=demonstrable; PROOF_DECLARATION=${a#--proof=}; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
+    --proof-none) want_value=proof-none ;;
+    --proof-none=*) PROOF=none; PROOF_DECLARATION=${a#--proof-none=}; PROOF_FLAGS=$((PROOF_FLAGS + 1)) ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -77,6 +94,18 @@ esac
 case "$YOLO" in
   on|off) ;;
   *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
+esac
+[ "$PROOF_FLAGS" -ne 0 ] || {
+  echo "error: promotion requires --proof <what would prove this task> or --proof-none <why it is not demonstrable>; decide it now, from the scout's findings, not after the implementation (bin/fm-proof.sh)" >&2
+  exit 1
+}
+[ "$PROOF_FLAGS" -eq 1 ] || {
+  echo "error: pass exactly one of --proof or --proof-none; a task is either demonstrable or it is not" >&2
+  exit 1
+}
+[ -n "$PROOF_DECLARATION" ] || { echo "error: the proof declaration must not be empty" >&2; exit 1; }
+case "$PROOF_DECLARATION" in
+  *$'\n'*|*$'\r'*) echo "error: the proof declaration must be one line" >&2; exit 1 ;;
 esac
 
 ID=${POS[0]}
@@ -115,11 +144,13 @@ META_LOCK_HELD=1
 grep -qx 'kind=scout' "$META" || { echo "error: task $ID is not a scout task (kind=scout not in meta)" >&2; exit 1; }
 
 TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
+grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^proof=' -e '^proof_declaration=' "$META" > "$TMP"
 {
   echo "kind=ship"
   echo "mode=$MODE"
   echo "yolo=$YOLO"
+  echo "proof=$PROOF"
+  echo "proof_declaration=$PROOF_DECLARATION"
 } >> "$TMP"
 mv "$TMP" "$META"
 TMP=
@@ -127,8 +158,17 @@ fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 
 HOME_Q=$(printf '%q' "$FM_HOME")
-echo "promoted $ID to ship mode=$MODE yolo=$YOLO (teardown protection restored)"
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+echo "promoted $ID to ship mode=$MODE yolo=$YOLO proof=$PROOF (teardown protection restored)"
+# The promoted worker still holds a SCOUT brief, so the capture path has to
+# travel in the ship instructions or it never learns where its evidence must
+# land - and ship teardown would then refuse on a bundle nobody asked for.
+if [ "$PROOF" = demonstrable ]; then
+  PROMOTE_PROOF_STEP="; before the final done: line, copy the evidence this work already produces (it is capture, not a new verification pass) into $DATA/$ID/proof/ so it survives cleanup, and link that path rather than any temporary one"
+else
+  PROMOTE_PROOF_STEP="; this task is declared not demonstrable ($PROOF_DECLARATION), so produce no evidence bundle for it"
+fi
+echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done$PROMOTE_PROOF_STEP>'"
 
 promote_print_rechain_hint() {
   local consent_home=$1 work_home=$2 task_id=$3 id prefix
