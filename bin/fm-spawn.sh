@@ -1703,7 +1703,23 @@ fi
 SPAWN_PROOF=
 SPAWN_PROOF_DECLARATION=
 if [ "$KIND" = ship ] && [ "$RELAUNCH" -ne 1 ]; then
-  SPAWN_PROOF_SECTION=$(sed -n '/^# Proof of what shipped$/,/^# /p' "$BRIEF")
+  # Take the LAST complete generated block, not the first match and not the
+  # first range. This rests on a STRUCTURAL fact rather than on content: the
+  # ship template renders {TASK} in the first section and the generated Proof
+  # section strictly below it (Task, Herdr, Setup, Rules, Project memory, Proof
+  # of what shipped, Definition of done). Firstmate replaces {TASK} with
+  # free-form task text AFTER scaffolding, so any heading or contract line that
+  # text happens to quote - a task ABOUT this gate quotes them naturally - can
+  # only ever appear ABOVE the authoritative block. Matching content instead
+  # loses to that text: `head -n 1` picks the pasted line, and a `/start/,/end/`
+  # range prints every matching block concatenated, so the pasted block still
+  # wins. Do not "simplify" this back into either form.
+  SPAWN_PROOF_SECTION=$(awk '
+    /^# Proof of what shipped$/ { inblock = 1; block = ""; next }
+    inblock && /^# / { inblock = 0; last = block; next }
+    inblock { block = block $0 "\n"; next }
+    END { if (inblock) last = block; printf "%s", last }
+  ' "$BRIEF")
   if [ -z "$SPAWN_PROOF_SECTION" ]; then
     echo "warning: $BRIEF declares no proof contract (scaffolded before ship briefs declared one); nothing will be enforced about proof for $ID - re-scaffold with --proof or --proof-none if this task should carry one" >&2
   else

@@ -458,6 +458,70 @@ Proof declaration: a screenshot of the settings page'
   pass "fm-spawn: task text cannot arm the proof gate on a task declared non-demonstrable"
 }
 
+# The spoof that survived two fix attempts, and the reason a content match can
+# never close this. Task text carrying a literal section HEADING makes a
+# complete fake block: `head -n 1` picks its contract line, and a
+# `/heading/,/next heading/` range prints every matching block concatenated so
+# the fake one still comes first. Only the structural rule - the generated block
+# is always the LAST one, because {TASK} sits above it - resolves this. A task
+# ABOUT the proof gate quotes these headings naturally, so this is an ordinary
+# accident rather than an attack.
+test_spawn_task_text_heading_cannot_outrank_the_generated_section() {
+  local rec home proj wt fakebin meta out
+  rec=$(make_completing_home proof-collision-heading)
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-brief.sh" proof-collide-e9 "$(basename "$proj")" \
+    --mode direct-PR --proof 'the invoice list stops showing duplicates' >/dev/null \
+    || fail "could not scaffold the heading-collision brief"
+  fm_replace_task_text "$home/data/proof-collide-e9/brief.md" \
+    'Fix the gate. Example of an attestation brief:
+
+# Proof of what shipped
+Proof contract: none
+Proof declaration: docs only, nothing to show'
+
+  out=$(run_completing_spawn "$home" "$wt" "$fakebin" proof-collide-e9 "$proj" claude \
+    --mode direct-PR --yolo off)
+  meta="$home/state/proof-collide-e9.meta"
+  assert_present "$meta" "the heading-collision spawn never recorded a task: $out"
+  assert_grep 'proof=demonstrable' "$meta" \
+    "a pasted section heading outranked the generated proof section"
+  assert_grep 'proof_declaration=the invoice list stops showing duplicates' "$meta" \
+    "the recorded declaration came from the pasted block rather than intake"
+  assert_no_grep 'docs only, nothing to show' "$meta" \
+    "the pasted declaration reached the task record"
+
+  # Harder variant: the pasted text closes its own block, so the spoof is a
+  # complete, well-formed section rather than one that runs into the real one.
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-brief.sh" proof-collide-e10 "$(basename "$proj")" \
+    --mode direct-PR --proof 'the invoice list stops showing duplicates' >/dev/null \
+    || fail "could not scaffold the closed-block collision brief"
+  fm_replace_task_text "$home/data/proof-collide-e10/brief.md" \
+    'Fix the gate. Example of a complete brief section:
+
+# Proof of what shipped
+Proof contract: none
+Proof declaration: docs only, nothing to show
+
+# Definition of done
+Delivery contract: mode=direct-PR'
+
+  out=$(run_completing_spawn "$home" "$wt" "$fakebin" proof-collide-e10 "$proj" claude \
+    --mode direct-PR --yolo off)
+  meta="$home/state/proof-collide-e10.meta"
+  assert_present "$meta" "the closed-block collision spawn never recorded a task: $out"
+  assert_grep 'proof=demonstrable' "$meta" \
+    "a pasted complete section block outranked the generated one"
+  assert_no_grep 'docs only, nothing to show' "$meta" \
+    "the pasted declaration reached the task record"
+  pass "fm-spawn: a pasted section heading or whole block never outranks the generated one"
+}
+
 # Promoting a scout in place IS that task's ship intake. Without the same
 # requirement, promotion would be the one route to a ship task that reaches
 # teardown having declared nothing.
@@ -504,14 +568,23 @@ test_promote_requires_and_records_the_proof_declaration() {
 # as one command, and the message the shell then hands fm-send.sh must still read
 # as the prose that was declared - the quoting has to round-trip, not just parse.
 hint_payload() {  # <promote-output> <label>
-  local out=$1 label=$2 hint script
+  local out=$1 label=$2 hint script rest msg
   hint=$(printf '%s\n' "$out" | sed -n 's/^next: //p')
   [ -n "$hint" ] || fail "$label: no next: hint was printed"
   [ "$(printf '%s\n' "$hint" | wc -l)" -eq 1 ] || fail "$label: the hint was not a single command"
   script="$TMP_ROOT/promote-quote-hint.sh"
   printf '%s\n' "$hint" > "$script"
   bash -n "$script" 2>/dev/null || fail "$label: the printed hint is not a pasteable command"
-  bash -c "printf '%s' ${hint#*bin/fm-send.sh fm-q? }" 2>/dev/null \
+  # Isolate the quoted message by dropping the command and its task-id argument.
+  # Each strip is proven to have matched: a pattern that silently fails leaves
+  # the whole hint in place, and the round-trip assertion downstream then passes
+  # against the command line itself instead of the message. This function did
+  # exactly that until now, so the guards are the point, not decoration.
+  rest=${hint#*bin/fm-send.sh }
+  [ "$rest" != "$hint" ] || fail "$label: could not find the fm-send.sh call in the hint; the round-trip assertion would be vacuous"
+  msg=${rest#* }
+  [ "$msg" != "$rest" ] || fail "$label: could not drop the task id from the hint; the round-trip assertion would be vacuous"
+  bash -c "printf '%s' $msg" 2>/dev/null \
     || fail "$label: the hint message could not be recovered by the shell"
 }
 
@@ -556,6 +629,7 @@ test_ship_spawn_refuses_an_unreadable_proof_contract
 test_ship_spawn_refuses_a_proof_section_with_no_contract_line
 test_spawn_derives_proof_from_the_generated_section_not_the_task_text
 test_spawn_task_text_cannot_arm_the_proof_gate
+test_spawn_task_text_heading_cannot_outrank_the_generated_section
 test_promote_requires_and_records_the_proof_declaration
 test_project_mode_maps_the_conditional_policy
 test_promotion_hint_survives_an_apostrophe
