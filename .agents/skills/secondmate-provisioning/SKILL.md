@@ -263,3 +263,13 @@ It kills child windows, discards child work and state inside the secondmate home
 If forced teardown contends with a fresh task publication in any affected home, one command refuses without publishing or removing task state; treat that refusal as terminal and inspect the other operation before retrying.
 `fm-spawn.sh --relaunch` and non-forced teardown remain outside that task-set serialization; [`fm-secondmate-liveness-lib.sh`'s header](../../../bin/fm-secondmate-liveness-lib.sh) owns automatic recovery serialization.
 Never use `--force` unless the captain explicitly said to discard the work.
+
+## Supervisor routing boundary
+
+Load `secondmate-provisioning` before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
+Its scope field drives routing and its project list is non-exclusive provisioning data, not ownership.
+Keep `local-only` work in the main home.
+
+A secondmate is idle by default and acts only on work routed by the main firstmate.
+It reconciles its own work under way after restart, then waits silently; an empty queue never authorizes a survey, audit, or self-directed improvement sweep.
+Do not reconstruct or supervise a secondmate's child tree from the main home.
